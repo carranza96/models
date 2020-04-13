@@ -37,6 +37,7 @@ from object_detection.utils import ops
 from object_detection.utils import shape_utils
 from object_detection.utils import variables_helper
 from object_detection.utils import visualization_utils as vis_utils
+from tensorflow.python import debug as tf_debug
 
 # A map of names to methods that help build the model.
 MODEL_BUILD_UTIL_MAP = {
@@ -493,10 +494,10 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
         variables_to_restore = variable_averages.variables_to_restore()
         keep_checkpoint_every_n_hours = (
             train_config.keep_checkpoint_every_n_hours)
-        saver = tf.train.Saver(
-            variables_to_restore,
-            keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours)
-        scaffold = tf.train.Scaffold(saver=saver)
+        # saver = tf.train.Saver(
+        #     variables_to_restore,
+        #     keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours)
+        # scaffold = tf.train.Scaffold(saver=saver)
 
     # EVAL executes on CPU, so use regular non-TPU EstimatorSpec.
     if use_tpu and mode != tf.estimator.ModeKeys.EVAL:
@@ -512,12 +513,12 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
       if scaffold is None:
         keep_checkpoint_every_n_hours = (
             train_config.keep_checkpoint_every_n_hours)
-        saver = tf.train.Saver(
-            sharded=True,
-            keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
-            save_relative_paths=True)
-        tf.add_to_collection(tf.GraphKeys.SAVERS, saver)
-        scaffold = tf.train.Scaffold(saver=saver)
+        # saver = tf.train.Saver(
+        #     sharded=True,
+        #     keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
+        #     save_relative_paths=True)
+        # tf.add_to_collection(tf.GraphKeys.SAVERS, saver)
+        # scaffold = tf.train.Scaffold(saver=saver)
       return tf.estimator.EstimatorSpec(
           mode=mode,
           predictions=detections,
@@ -716,7 +717,8 @@ def create_train_and_eval_specs(train_input_fn,
                                 train_steps,
                                 eval_on_train_data=False,
                                 final_exporter_name='Servo',
-                                eval_spec_names=None):
+                                eval_spec_names=None,
+                                debug_tensorboard=False):
   """Creates a `TrainSpec` and `EvalSpec`s.
 
   Args:
@@ -737,8 +739,13 @@ def create_train_and_eval_specs(train_input_fn,
     True, the last `EvalSpec` in the list will correspond to training data. The
     rest EvalSpecs in the list are evaluation datas.
   """
-  train_spec = tf.estimator.TrainSpec(
-      input_fn=train_input_fn, max_steps=train_steps)
+  if debug_tensorboard:
+    debug_hook = tf_debug.TensorBoardDebugHook("localhost:6060", send_traceback_and_source_code=False)
+    train_spec = tf.estimator.TrainSpec(
+          input_fn=train_input_fn, max_steps=train_steps, hooks=[debug_hook])
+  else:
+    train_spec = tf.estimator.TrainSpec(
+          input_fn=train_input_fn, max_steps=train_steps)
 
   if eval_spec_names is None:
     eval_spec_names = [str(i) for i in range(len(eval_input_fns))]
