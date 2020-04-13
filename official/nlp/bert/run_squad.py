@@ -19,9 +19,9 @@ from __future__ import division
 from __future__ import print_function
 
 import json
-
 import os
-import tempfile
+import time
+
 from absl import app
 from absl import flags
 from absl import logging
@@ -47,11 +47,13 @@ FLAGS = flags.FLAGS
 def train_squad(strategy,
                 input_meta_data,
                 custom_callbacks=None,
-                run_eagerly=False):
+                run_eagerly=False,
+                init_checkpoint=None):
   """Run bert squad training."""
   bert_config = bert_configs.BertConfig.from_json_file(FLAGS.bert_config_file)
+  init_checkpoint = init_checkpoint or FLAGS.init_checkpoint
   run_squad_helper.train_squad(strategy, input_meta_data, bert_config,
-                               custom_callbacks, run_eagerly)
+                               custom_callbacks, run_eagerly, init_checkpoint)
 
 
 def predict_squad(strategy, input_meta_data):
@@ -126,24 +128,19 @@ def main(_):
   if 'predict' in FLAGS.mode:
     predict_squad(strategy, input_meta_data)
   if 'eval' in FLAGS.mode:
-    if input_meta_data.get('version_2_with_negative', False):
-      logging.error('SQuAD v2 eval is not supported. '
-                    'Falling back to predict mode.')
-      predict_squad(strategy, input_meta_data)
-    else:
-      eval_metrics = eval_squad(strategy, input_meta_data)
-      f1_score = eval_metrics['f1']
-      logging.info('SQuAD eval F1-score: %f', f1_score)
-      if (not strategy) or strategy.extended.should_save_summary:
-        summary_dir = os.path.join(FLAGS.model_dir, 'summaries')
-      else:
-        summary_dir = tempfile.mkdtemp()
-      summary_writer = tf.summary.create_file_writer(
-          os.path.join(summary_dir, 'eval'))
-      with summary_writer.as_default():
-        # TODO(lehou): write to the correct step number.
-        tf.summary.scalar('F1-score', f1_score, step=0)
-        summary_writer.flush()
+    eval_metrics = eval_squad(strategy, input_meta_data)
+    f1_score = eval_metrics['final_f1']
+    logging.info('SQuAD eval F1-score: %f', f1_score)
+    summary_dir = os.path.join(FLAGS.model_dir, 'summaries', 'eval')
+    summary_writer = tf.summary.create_file_writer(summary_dir)
+    with summary_writer.as_default():
+      # TODO(lehou): write to the correct step number.
+      tf.summary.scalar('F1-score', f1_score, step=0)
+      summary_writer.flush()
+    # Also write eval_metrics to json file.
+    squad_lib_wp.write_to_json_files(
+        eval_metrics, os.path.join(summary_dir, 'eval_metrics.json'))
+    time.sleep(60)
 
 
 if __name__ == '__main__':
