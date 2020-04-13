@@ -47,7 +47,7 @@ def build_input(tfrecord_paths, num_additional_channels=0):
 
   features = tf.parse_single_example(
       serialized_example_tensor,
-      features= features_dict)
+      features=features_dict)
   encoded_image = features[standard_fields.TfExampleFields.image_encoded]
   image_tensor = tf.image.decode_image(encoded_image, channels=3)
   image_tensor.set_shape([None, None, 3])
