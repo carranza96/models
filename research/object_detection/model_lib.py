@@ -37,6 +37,7 @@ from object_detection.utils import ops
 from object_detection.utils import shape_utils
 from object_detection.utils import variables_helper
 from object_detection.utils import visualization_utils as vis_utils
+from tensorflow.python import debug as tf_debug
 
 # A map of names to methods that help build the model.
 MODEL_BUILD_UTIL_MAP = {
@@ -716,7 +717,8 @@ def create_train_and_eval_specs(train_input_fn,
                                 train_steps,
                                 eval_on_train_data=False,
                                 final_exporter_name='Servo',
-                                eval_spec_names=None):
+                                eval_spec_names=None,
+                                debug_tensorboard=False):
   """Creates a `TrainSpec` and `EvalSpec`s.
 
   Args:
@@ -737,8 +739,13 @@ def create_train_and_eval_specs(train_input_fn,
     True, the last `EvalSpec` in the list will correspond to training data. The
     rest EvalSpecs in the list are evaluation datas.
   """
-  train_spec = tf.estimator.TrainSpec(
-      input_fn=train_input_fn, max_steps=train_steps)
+  if debug_tensorboard:
+    debug_hook = tf_debug.TensorBoardDebugHook("localhost:6060", send_traceback_and_source_code=False)
+    train_spec = tf.estimator.TrainSpec(
+          input_fn=train_input_fn, max_steps=train_steps, hooks=[debug_hook])
+  else:
+    train_spec = tf.estimator.TrainSpec(
+          input_fn=train_input_fn, max_steps=train_steps)
 
   if eval_spec_names is None:
     eval_spec_names = [str(i) for i in range(len(eval_input_fns))]
