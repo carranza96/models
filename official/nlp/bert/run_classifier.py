@@ -24,9 +24,8 @@ import os
 from absl import app
 from absl import flags
 from absl import logging
+import gin
 import tensorflow as tf
-
-from official.modeling import model_training_utils
 from official.modeling import performance
 from official.nlp import optimization
 from official.nlp.bert import bert_models
@@ -34,6 +33,7 @@ from official.nlp.bert import common_flags
 from official.nlp.bert import configs as bert_configs
 from official.nlp.bert import input_pipeline
 from official.nlp.bert import model_saving_utils
+from official.nlp.bert import model_training_utils
 from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 
@@ -57,6 +57,7 @@ flags.DEFINE_integer('train_batch_size', 32, 'Batch size for training.')
 flags.DEFINE_integer('eval_batch_size', 32, 'Batch size for evaluation.')
 
 common_flags.define_common_bert_flags()
+common_flags.define_gin_flags()
 
 FLAGS = flags.FLAGS
 
@@ -86,7 +87,7 @@ def get_dataset_fn(input_file_pattern, max_seq_length, global_batch_size,
     batch_size = ctx.get_per_replica_batch_size(
         global_batch_size) if ctx else global_batch_size
     dataset = input_pipeline.create_classifier_dataset(
-        input_file_pattern,
+        tf.io.gfile.glob(input_file_pattern),
         max_seq_length,
         batch_size,
         is_training=is_training,
@@ -126,7 +127,8 @@ def run_bert_classifier(strategy,
             hub_module_url=FLAGS.hub_module_url,
             hub_module_trainable=FLAGS.hub_module_trainable))
     optimizer = optimization.create_optimizer(
-        initial_lr, steps_per_epoch * epochs, warmup_steps)
+        initial_lr, steps_per_epoch * epochs, warmup_steps,
+        FLAGS.end_lr, FLAGS.optimizer_type)
     classifier_model.optimizer = performance.configure_optimizer(
         optimizer,
         use_float16=common_flags.use_float16(),
@@ -156,6 +158,7 @@ def run_bert_classifier(strategy,
         init_checkpoint,
         epochs,
         steps_per_epoch,
+        steps_per_loop,
         eval_steps,
         custom_callbacks=custom_callbacks)
 
@@ -189,13 +192,14 @@ def run_keras_compile_fit(model_dir,
                           init_checkpoint,
                           epochs,
                           steps_per_epoch,
+                          steps_per_loop,
                           eval_steps,
                           custom_callbacks=None):
   """Runs BERT classifier model using Keras compile/fit API."""
 
   with strategy.scope():
     training_dataset = train_input_fn()
-    evaluation_dataset = eval_input_fn()
+    evaluation_dataset = eval_input_fn() if eval_input_fn else None
     bert_model, sub_model = model_fn()
     optimizer = bert_model.optimizer
 
@@ -203,7 +207,11 @@ def run_keras_compile_fit(model_dir,
       checkpoint = tf.train.Checkpoint(model=sub_model)
       checkpoint.restore(init_checkpoint).assert_existing_objects_matched()
 
-    bert_model.compile(optimizer=optimizer, loss=loss_fn, metrics=[metric_fn()])
+    bert_model.compile(
+        optimizer=optimizer,
+        loss=loss_fn,
+        metrics=[metric_fn()],
+        experimental_steps_per_execution=steps_per_loop)
 
     summary_dir = os.path.join(model_dir, 'summaries')
     summary_callback = tf.keras.callbacks.TensorBoard(summary_dir)
@@ -324,7 +332,9 @@ def run_bert(strategy,
              input_meta_data,
              model_config,
              train_input_fn=None,
-             eval_input_fn=None):
+             eval_input_fn=None,
+             init_checkpoint=None,
+             custom_callbacks=None):
   """Run BERT training."""
   if FLAGS.mode == 'export_only':
     # As Keras ModelCheckpoint callback used with Keras compile/fit() API
@@ -351,14 +361,14 @@ def run_bert(strategy,
   if not strategy:
     raise ValueError('Distribution strategy has not been specified.')
 
+  if not custom_callbacks:
+    custom_callbacks = []
+
   if FLAGS.log_steps:
-    custom_callbacks = [keras_utils.TimeHistory(
+    custom_callbacks.append(keras_utils.TimeHistory(
         batch_size=FLAGS.train_batch_size,
         log_steps=FLAGS.log_steps,
-        logdir=FLAGS.model_dir,
-    )]
-  else:
-    custom_callbacks = None
+        logdir=FLAGS.model_dir))
 
   trained_model = run_bert_classifier(
       strategy,
@@ -371,7 +381,7 @@ def run_bert(strategy,
       eval_steps,
       warmup_steps,
       FLAGS.learning_rate,
-      FLAGS.init_checkpoint,
+      init_checkpoint or FLAGS.init_checkpoint,
       train_input_fn,
       eval_input_fn,
       run_eagerly=FLAGS.run_eagerly,
@@ -389,8 +399,13 @@ def run_bert(strategy,
   return trained_model
 
 
-def main(_):
-  # Users should always run this script under TF 2.x
+def custom_main(custom_callbacks=None):
+  """Run classification.
+
+  Args:
+    custom_callbacks: list of tf.keras.Callbacks passed to training loop.
+  """
+  gin.parse_config_files_and_bindings(FLAGS.gin_file, FLAGS.gin_param)
 
   with tf.io.gfile.GFile(FLAGS.input_meta_data_path, 'rb') as reader:
     input_meta_data = json.loads(reader.read().decode('utf-8'))
@@ -416,7 +431,12 @@ def main(_):
 
   bert_config = bert_configs.BertConfig.from_json_file(FLAGS.bert_config_file)
   run_bert(strategy, input_meta_data, bert_config, train_input_fn,
-           eval_input_fn)
+           eval_input_fn, custom_callbacks=custom_callbacks)
+
+
+def main(_):
+  # Users should always run this script under TF 2.x
+  custom_main(custom_callbacks=None)
 
 
 if __name__ == '__main__':

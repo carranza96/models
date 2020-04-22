@@ -18,6 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import math
 from absl import app
 from absl import flags
 from absl import logging
@@ -81,8 +82,8 @@ def get_num_train_iterations(flags_obj):
     train_steps = min(flags_obj.train_steps, train_steps)
     train_epochs = 1
 
-  eval_steps = (
-      imagenet_preprocessing.NUM_IMAGES['validation'] // flags_obj.batch_size)
+  eval_steps = math.ceil(1.0 * imagenet_preprocessing.NUM_IMAGES['validation'] /
+                         flags_obj.batch_size)
 
   return train_steps, train_epochs, eval_steps
 
@@ -119,8 +120,8 @@ def run(flags_obj):
   # TODO(anj-s): Set data_format without using Keras.
   data_format = flags_obj.data_format
   if data_format is None:
-    data_format = ('channels_first'
-                   if tf.test.is_built_with_cuda() else 'channels_last')
+    data_format = ('channels_first' if tf.config.list_physical_devices('GPU')
+                   else 'channels_last')
   tf.keras.backend.set_image_data_format(data_format)
 
   strategy = distribution_utils.get_distribution_strategy(
@@ -162,7 +163,7 @@ def run(flags_obj):
   resnet_controller = controller.Controller(
       strategy,
       runnable.train,
-      runnable.evaluate,
+      runnable.evaluate if not flags_obj.skip_eval else None,
       global_step=runnable.global_step,
       steps_per_loop=steps_per_loop,
       train_steps=per_epoch_steps * train_epochs,

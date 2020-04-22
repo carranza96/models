@@ -91,6 +91,11 @@ class FasterRCNNResnetV1FeatureExtractor(
     if resized_inputs.shape.as_list()[3] == 3:
       channel_means = [123.68, 116.779, 103.939]
       return resized_inputs - [[channel_means]]
+
+    elif resized_inputs.shape.as_list()[3] == 6:
+      channel_means = [123.68, 116.779, 103.939, 131.979, 26.662, 12.622]
+      return resized_inputs - [[channel_means]]
+
     else:
       return resized_inputs
 
