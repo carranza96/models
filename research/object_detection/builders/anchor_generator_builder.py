@@ -19,6 +19,7 @@ from object_detection.anchor_generators import flexible_grid_anchor_generator
 from object_detection.anchor_generators import grid_anchor_generator
 from object_detection.anchor_generators import multiple_grid_anchor_generator
 from object_detection.anchor_generators import multiscale_grid_anchor_generator
+from object_detection.anchor_generators import regions_grid_anchor_generator
 from object_detection.protos import anchor_generator_pb2
 
 
@@ -105,5 +106,23 @@ def build(anchor_generator_config):
       offsets.append((anchor_grid.height_offset, anchor_grid.width_offset))
     return flexible_grid_anchor_generator.FlexibleGridAnchorGenerator(
         base_sizes, aspect_ratios, strides, offsets, cfg.normalize_coordinates)
+  elif anchor_generator_config.WhichOneof(
+      'anchor_generator_oneof') == 'regions_grid_anchor_generator':
+    anchor_generator_config = anchor_generator_config.regions_grid_anchor_generator
+    return regions_grid_anchor_generator.RegionsGridAnchorGenerator(
+        regions_limits=[float(region_limit) for region_limit in anchor_generator_config.regions_limits],
+        scales=[[float(f) for f in scale.floats] for scale in anchor_generator_config.scales],
+        aspect_ratios=[[float(f) for f in aspect_ratio.floats]
+                       for aspect_ratio
+                       in anchor_generator_config.aspect_ratios],
+        special_cases=[[float(f) for f in special_case.floats]
+                       for special_case
+                       in anchor_generator_config.special_cases],
+        base_anchor_size=[anchor_generator_config.height,
+                          anchor_generator_config.width],
+        anchor_stride=[anchor_generator_config.height_stride,
+                       anchor_generator_config.width_stride],
+        anchor_offset=[anchor_generator_config.height_offset,
+                       anchor_generator_config.width_offset])
   else:
     raise ValueError('Empty anchor generator.')

@@ -6,13 +6,14 @@ import numpy as np
 
 import tensorflow as tf
 
+from object_detection.anchor_generators import grid_anchor_generator
 from object_detection.anchor_generators.grid_anchor_generator import _center_size_bbox_to_corners_bbox
 from object_detection.core import anchor_generator
 from object_detection.core import box_list
 from object_detection.utils import ops
 
 
-class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
+class RegionsGridAnchorGenerator(grid_anchor_generator.GridAnchorGenerator):
     """Generates different grid anchors for vertical regions in an Image"""
 
     def __init__(self,
@@ -212,11 +213,14 @@ def tile_anchors_regions(regions,
 
     y_centers = tf.cast(tf.range(grid_height), dtype=tf.float32)
     y_centers = y_centers * anchor_stride[0] + anchor_offset[0]
-    y_centers_regions = [tf.slice(y_centers,
-                                  tf.cast([region_min * int(y_centers.shape[0])], tf.int32),
-                                  tf.cast([int(region_max * int(y_centers.shape[0])) - int(
-                                      region_min * int(y_centers.shape[0]))], tf.int32))
+    print(regions, y_centers.shape, grid_height, grid_width)
+    y_centers_regions = [y_centers[tf.cast(region_min * tf.cast(grid_height, tf.float32), tf.int32):tf.cast(region_max * tf.cast(grid_height, tf.float32), tf.int32)]
                          for region_min, region_max in regions]
+    # y_centers_regions = [tf.slice(y_centers,
+    #                               tf.cast([region_min * grid_height], tf.int32),
+    #                               [tf.cast(region_max * grid_height, tf.int32) - tf.cast(
+    #                                   region_min * grid_height, tf.int32)])
+    #                      for region_min, region_max in regions]
 
     centers = [ops.meshgrid(x_centers, y_centers) for y_centers in y_centers_regions]
     x_centers_region, y_centers_region = [c[0] for c in centers], [c[1] for c in centers]
@@ -238,13 +242,13 @@ def tile_anchors_regions(regions,
         [x[1] for x in vertical_grid], axis=0)
 
     for x_position, y_position, anchor_index, scale, aspect_ratio in special_cases:
-        x_index = int(x_position * grid_width)
-        y_index = int(y_position * grid_height)
+        x_index = tf.cast(x_position * tf.cast(grid_width, tf.float32), tf.int32)
+        y_index = tf.cast(y_position * tf.cast(grid_height, tf.float32), tf.int32)
         sqrt_ar = np.sqrt(aspect_ratio)
         w = scale / sqrt_ar * base_anchor_size[0]
         h = scale * sqrt_ar * base_anchor_size[1]
-        widths_grid = tf.tensor_scatter_nd_update(widths_grid, [[[[y_index, x_index, anchor_index]]]], [[[w]]])
-        heights_grid = tf.tensor_scatter_nd_update(heights_grid, [[[[y_index, x_index, anchor_index]]]], [[[h]]])
+        widths_grid = tf.tensor_scatter_nd_update(widths_grid, [[[[y_index, x_index, tf.cast(anchor_index, tf.int32)]]]], [[[w]]])
+        heights_grid = tf.tensor_scatter_nd_update(heights_grid, [[[[y_index, x_index, tf.cast(anchor_index, tf.int32)]]]], [[[h]]])
 
     bbox_centers = tf.stack([y_centers_grid, x_centers_grid], axis=3)
     bbox_sizes = tf.stack([heights_grid, widths_grid], axis=3)
