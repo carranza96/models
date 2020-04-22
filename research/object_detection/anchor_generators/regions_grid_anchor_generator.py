@@ -6,15 +6,14 @@ import numpy as np
 
 import tensorflow as tf
 
-from object_detection.anchor_generators import grid_anchor_generator
+from object_detection.anchor_generators.grid_anchor_generator import _center_size_bbox_to_corners_bbox
 from object_detection.core import anchor_generator
-from object_detection.core import box_list_ops
 from object_detection.core import box_list
 from object_detection.utils import ops
 
 
 class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
-    """ """
+    """Generates different grid anchors for vertical regions in an Image"""
 
     def __init__(self,
                  regions_limits,
@@ -22,29 +21,55 @@ class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
                  aspect_ratios,
                  base_anchor_size=None,
                  anchor_stride=None,
-                 anchor_offset=None):
+                 anchor_offset=None,
+                 special_cases=[]):
         """Constructs a RegionsGridAnchorGenerator
 
         Args:
             regions_limits:
-            scales:
-            aspect_ratios:
-            base_anchor_size:
-            anchor_stride:
-            anchor_offset:
+            scales: a list of lists of (float) scales, every lists of scales must have same
+                    length (S). Shape is (R, S)
+            aspect_ratios: a list of lists of (float) aspect ratios, every set of aspect ratios
+                           must have same length (A). Shape is (R, A)
+            base_anchor_size: base anchor size as height, width ((length-2 float32 list or tensor, default=[256, 256])
+            anchor_stride: difference in centers between base anchors for adjacent
+                           grid positions (length-2 float32 list or tensor,
+                           default=[16, 16])
+            anchor_offset: center of the anchor with scale and aspect ratio 1 for the
+                           upper left element of the grid, this should be zero for
+                           feature networks with only VALID padding and even receptive
+                           field size, but may need additional calculation if other
+                           padding is used (length-2 float32 list or tensor,
+                           default=[0, 0])
+            special_cases: list of special anchors to add to the grid. It is a list of lists of 4 values
+                           corresponding to [x_position, y_position, anchor_index, scale, aspect_ratio].
+                           x_position is a float (0,1) representing the x position where to add the anchor.
+                           y_position is a float (0,1) representing the y position where to add the anchor.
+                           anchor_index is an integer representing which anchor to substitute from the given position.
+                           scale and aspect_ratio are floats describing the special anchor.
         """
         if not isinstance(regions_limits, list) or not isinstance(scales, list) or not isinstance(aspect_ratios, list):
             raise ValueError("region_limits, scales and aspect_ratios are expected to be lists")
-        if not len(scales) == len(aspect_ratios) == (len(regions_limits)+1):
+        if not len(scales) == len(aspect_ratios) == (len(regions_limits) + 1):
             raise ValueError("Number of scales and/or aspect_ratio do not correspond to the regions defined.")
         if not all([isinstance(list_item, list) or isinstance(list_item, tuple) for list_item in scales]) or not all(
                 [len(list_item) == len(scales[0]) for list_item in scales]):
             raise ValueError("scales is expected to be a list of lists or tuples of same length")
-        if not all([isinstance(list_item, list) or isinstance(list_item, tuple) for list_item in aspect_ratios]) or not all(
+        if not all([isinstance(list_item, list) or isinstance(list_item, tuple) for list_item in
+                    aspect_ratios]) or not all(
                 [len(list_item) == len(scales[0]) for list_item in aspect_ratios]):
             raise ValueError("scales is expected to be a list of lists or tuples of same length")
         if not all([0 < list_item < 1 for list_item in regions_limits]):
             raise ValueError("regions_limits are expected to be in the range (0, 1)")
+
+        print("\n\n\n\n\n########## REGIONS")
+        print(regions_limits,
+             scales,
+             aspect_ratios,
+             base_anchor_size,
+             anchor_stride,
+             anchor_offset,
+             special_cases, '\n###########\n\n\n\n')
 
         # Handle argument defaults
         if base_anchor_size is None:
@@ -60,6 +85,7 @@ class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
         self._base_anchor_size = base_anchor_size
         self._anchor_stride = anchor_stride
         self._anchor_offset = anchor_offset
+        self._special_cases = special_cases
 
     def name_scope(self):
         return 'RegionsGridAnchorGenerator'
@@ -74,7 +100,7 @@ class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
         return [len(self._scales[0]) * len(self._aspect_ratios[0])]
 
     def _generate(self, feature_map_shape_list):
-        """TODO:Generates a collection of bounding boxes to be used as anchors.
+        """Generates a collection of bounding boxes to be used as anchors.
 
         Args:
           feature_map_shape_list: list of pairs of convnet layer resolutions in the
@@ -110,15 +136,16 @@ class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
             self._anchor_offset = tf.cast(tf.convert_to_tensor(
                 self._anchor_offset), dtype=tf.float32)
 
-        regions = [(0 if i == 0 else self._regions_limits[i-1],
+        regions = [(0 if i == 0 else self._regions_limits[i - 1],
                     1 if i == len(self._regions_limits) else self._regions_limits[i])
-                   for i in range(len(self._regions_limits)+1)]
+                   for i in range(len(self._regions_limits) + 1)]
 
         grid_height, grid_width = feature_map_shape_list[0]
 
         scales_grid, aspect_ratios_grid = [], []
         for region_index in range(len(regions)):
-            scales_grid_region, aspect_ratios_grid_region = ops.meshgrid(self._scales[region_index], self._aspect_ratios[region_index])
+            scales_grid_region, aspect_ratios_grid_region = ops.meshgrid(self._scales[region_index],
+                                                                         self._aspect_ratios[region_index])
             scales_grid_region = tf.reshape(scales_grid_region, [-1])
             aspect_ratios_grid_region = tf.reshape(aspect_ratios_grid_region, [-1])
             scales_grid.append(scales_grid_region)
@@ -131,15 +158,16 @@ class RegionsGridAnchorGenerator(anchor_generator.AnchorGenerator):
                                        aspect_ratios_grid,
                                        self._base_anchor_size,
                                        self._anchor_stride,
-                                       self._anchor_offset)
+                                       self._anchor_offset,
+                                       self._special_cases)
 
         num_anchors = anchors.num_boxes_static()
         if num_anchors is None:
             num_anchors = anchors.num_boxes()
         anchor_indices = tf.zeros([num_anchors])
         anchors.add_field('feature_map_index', anchor_indices)
-        print(anchors)
         return [anchors]
+
 
 def tile_anchors_regions(regions,
                          grid_height,
@@ -148,28 +176,18 @@ def tile_anchors_regions(regions,
                          aspect_ratios,
                          base_anchor_size,
                          anchor_stride,
-                         anchor_offset):
-    """TODO:Create a tiled set of anchors strided along a grid in image space.
-
-    This op creates a set of anchor boxes by placing a "basis" collection of
-    boxes with user-specified scales and aspect ratios centered at evenly
-    distributed points along a grid.  The basis collection is specified via the
-    scale and aspect_ratios arguments.  For example, setting scales=[.1, .2, .2]
-    and aspect ratios = [2,2,1/2] means that we create three boxes: one with scale
-    .1, aspect ratio 2, one with scale .2, aspect ratio 2, and one with scale .2
-    and aspect ratio 1/2.  Each box is multiplied by "base_anchor_size" before
-    placing it over its respective center.
-
-    Grid points are specified via grid_height, grid_width parameters as well as
-    the anchor_stride and anchor_offset parameters.
+                         anchor_offset,
+                         special_cases):
+    """Create a tiled set of anchors strided along a grid in image space.
 
     Args:
+      regions: list of [min, max) values of each vertical regions
       grid_height: size of the grid in the y direction (int or int scalar tensor)
       grid_width: size of the grid in the x direction (int or int scalar tensor)
-      scales: a 1-d  (float) tensor representing the scale of each box in the
-        basis set.
-      aspect_ratios: a 1-d (float) tensor representing the aspect ratio of each
-        box in the basis set.  The length of the scales and aspect_ratios tensors
+      scales: a 2-d  (float) tensor representing the scale of each box in the
+        basis set for each regions.
+      aspect_ratios: a 2-d (float) tensor representing the aspect ratio of each
+        box in the basis set for each regions.  The shape of the scales and aspect_ratios tensors
         must be equal.
       base_anchor_size: base anchor size as [height, width]
         (float tensor of shape [2])
@@ -180,44 +198,58 @@ def tile_anchors_regions(regions,
                      feature networks with only VALID padding and even receptive
                      field size, but may need some additional calculation if other
                      padding is used (float tensor of shape [2])
+      special_cases: list of special anchors to add to the grid. It is a list of lists of 4 values
+                     corresponding to [x_position, y_position, anchor_index, scale, aspect_ratio].
+                     x_position is a float (0,1) representing the x position where to add the anchor.
+                     y_position is a float (0,1) representing the y position where to add the anchor.
+                     anchor_index is an integer representing which anchor to substitute from the given position.
+                     scale and aspect_ratio are floats describing the special anchor.
     Returns:
       a BoxList holding a collection of N anchor boxes
     """
-    bbox_corners = tf.constant([], shape=(0,4), dtype=tf.float32)
-
     x_centers = tf.cast(tf.range(grid_width), dtype=tf.float32)
     x_centers = x_centers * anchor_stride[1] + anchor_offset[1]
 
-    for region_index, (region_min, region_max) in enumerate(regions):
-        ratio_sqrts = tf.sqrt(aspect_ratios[region_index])
-        heights = scales[region_index] / ratio_sqrts * base_anchor_size[0]
-        widths = scales[region_index] * ratio_sqrts * base_anchor_size[1]
+    y_centers = tf.cast(tf.range(grid_height), dtype=tf.float32)
+    y_centers = y_centers * anchor_stride[0] + anchor_offset[0]
+    y_centers_regions = [tf.slice(y_centers,
+                                  tf.cast([region_min * int(y_centers.shape[0])], tf.int32),
+                                  tf.cast([int(region_max * int(y_centers.shape[0])) - int(
+                                      region_min * int(y_centers.shape[0]))], tf.int32))
+                         for region_min, region_max in regions]
 
-        # Get a grid of box centers
-        region_y_offset = anchor_offset[0] if region_index==0 else anchor_stride[0] - int(region_min * grid_height) % anchor_stride[0]
-        y_centers = tf.cast(tf.range(int(region_min * grid_height), int(region_max * grid_height)), dtype=tf.float32)
-        y_centers = y_centers * anchor_stride[0] + anchor_offset[0] + region_y_offset
-        x_centers_region, y_centers_region = ops.meshgrid(x_centers, y_centers)
+    centers = [ops.meshgrid(x_centers, y_centers) for y_centers in y_centers_regions]
+    x_centers_region, y_centers_region = [c[0] for c in centers], [c[1] for c in centers]
 
-        widths_grid, x_centers_grid = ops.meshgrid(widths, x_centers_region)
-        heights_grid, y_centers_grid = ops.meshgrid(heights, y_centers_region)
+    ratio_sqrts_region = [tf.sqrt(aspect_ratios[region_index]) for region_index in range(len(regions))]
+    heights_region = [scales[region_index] / ratio_sqrts_region[region_index] * base_anchor_size[0]
+                      for region_index in range(len(regions))]
+    widths_region = [scales[region_index] * ratio_sqrts_region[region_index] * base_anchor_size[1]
+                     for region_index in range(len(regions))]
 
-        bbox_centers = tf.stack([y_centers_grid, x_centers_grid], axis=3)
-        bbox_sizes = tf.stack([heights_grid, widths_grid], axis=3)
-        bbox_centers = tf.reshape(bbox_centers, [-1, 2])
-        bbox_sizes = tf.reshape(bbox_sizes, [-1, 2])
-        bbox_corners = tf.concat([bbox_corners, _center_size_bbox_to_corners_bbox(bbox_centers, bbox_sizes)], axis=0)
+    horizontal_grid = [ops.meshgrid(widths_region[region_index], x_centers_region[region_index]) for region_index in
+                       range(len(regions))]
+    vertical_grid = [ops.meshgrid(heights_region[region_index], y_centers_region[region_index]) for region_index in
+                     range(len(regions))]
+
+    widths_grid, x_centers_grid = tf.concat([x[0] for x in horizontal_grid], axis=0), tf.concat(
+        [x[1] for x in horizontal_grid], axis=0)
+    heights_grid, y_centers_grid = tf.concat([x[0] for x in vertical_grid], axis=0), tf.concat(
+        [x[1] for x in vertical_grid], axis=0)
+
+    for x_position, y_position, anchor_index, scale, aspect_ratio in special_cases:
+        x_index = int(x_position * grid_width)
+        y_index = int(y_position * grid_height)
+        sqrt_ar = np.sqrt(aspect_ratio)
+        w = scale / sqrt_ar * base_anchor_size[0]
+        h = scale * sqrt_ar * base_anchor_size[1]
+        widths_grid = tf.tensor_scatter_nd_update(widths_grid, [[[[y_index, x_index, anchor_index]]]], [[[w]]])
+        heights_grid = tf.tensor_scatter_nd_update(heights_grid, [[[[y_index, x_index, anchor_index]]]], [[[h]]])
+
+    bbox_centers = tf.stack([y_centers_grid, x_centers_grid], axis=3)
+    bbox_sizes = tf.stack([heights_grid, widths_grid], axis=3)
+    bbox_centers = tf.reshape(bbox_centers, [-1, 2])
+    bbox_sizes = tf.reshape(bbox_sizes, [-1, 2])
+    bbox_corners = _center_size_bbox_to_corners_bbox(bbox_centers, bbox_sizes)
+
     return box_list.BoxList(bbox_corners)
-
-def _center_size_bbox_to_corners_bbox(centers, sizes):
-    """Converts bbox center-size representation to corners representation.
-
-    Args:
-      centers: a tensor with shape [N, 2] representing bounding box centers
-      sizes: a tensor with shape [N, 2] representing bounding boxes
-
-    Returns:
-      corners: tensor with shape [N, 4] representing bounding boxes in corners
-        representation
-    """
-    return tf.concat([centers - .5 * sizes, centers + .5 * sizes], 1)

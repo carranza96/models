@@ -1,0 +1,44 @@
+syntax = "proto2";
+
+package object_detection.protos;
+
+// Configuration proto for RegionsGridAnchorGenerator. See
+// anchor_generators/regions_grid_anchor_generator.py for details.
+message RegionsGridAnchorGenerator {
+   // Anchor height in pixels.
+  optional int32 height = 1 [default = 256];
+
+  // Anchor width in pixels.
+  optional int32 width = 2 [default = 256];
+
+  // Anchor stride in height dimension in pixels.
+  optional int32 height_stride = 3 [default = 16];
+
+  // Anchor stride in width dimension in pixels.
+  optional int32 width_stride = 4 [default = 16];
+
+  // Anchor height offset in pixels.
+  optional int32 height_offset = 5 [default = 0];
+
+  // Anchor width offset in pixels.
+  optional int32 width_offset = 6 [default = 0];
+
+  // At any given location, len(scales) * len(aspect_ratios) anchors are
+  // generated with all possible combinations of scales and aspect ratios.
+
+  // List of regions limits for the anchors.
+  repeated float regions_limits = 7;
+
+  // List of scales for the anchors.
+  repeated FloatList scales = 8;
+
+  // List of aspect ratios for the anchors.
+  repeated FloatList aspect_ratios = 9;
+
+  // List of special anchors to add.
+  repeated FloatList special_cases = 10;
+}
+
+message FloatList {
+    repeated float floats = 1;
+}
