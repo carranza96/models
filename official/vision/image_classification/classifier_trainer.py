@@ -32,7 +32,6 @@ import tensorflow as tf
 from official.modeling import performance
 from official.modeling.hyperparams import params_dict
 from official.utils import hyperparams_flags
-from official.utils.logs import logger
 from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 from official.vision.image_classification import callbacks as custom_callbacks
@@ -101,15 +100,16 @@ def get_image_size_from_model(
 def _get_dataset_builders(params: base_configs.ExperimentConfig,
                           strategy: tf.distribute.Strategy,
                           one_hot: bool
-                         ) -> Tuple[Any, Any, Any]:
-  """Create and return train, validation, and test dataset builders."""
+                         ) -> Tuple[Any, Any]:
+  """Create and return train and validation dataset builders."""
   if one_hot:
     logging.warning('label_smoothing > 0, so datasets will be one hot encoded.')
   else:
     logging.warning('label_smoothing not applied, so datasets will not be one '
                     'hot encoded.')
 
-  num_devices = strategy.num_replicas_in_sync
+  num_devices = strategy.num_replicas_in_sync if strategy else 1
+
   image_size = get_image_size_from_model(params)
 
   dataset_configs = [
@@ -186,8 +186,7 @@ def _get_params_from_flags(flags_obj: flags.FlagValues):
 
   for param in overriding_configs:
     logging.info('Overriding params: %s', param)
-    # Set is_strict to false because we can have dynamic dict parameters.
-    params = params_dict.override_params_dict(params, param, is_strict=False)
+    params = params_dict.override_params_dict(params, param, is_strict=True)
 
   params.validate()
   params.lock()
@@ -234,7 +233,7 @@ def initialize(params: base_configs.ExperimentConfig,
   """Initializes backend related initializations."""
   keras_utils.set_session_config(
       enable_xla=params.runtime.enable_xla)
-  if params.runtime.gpu_threads_enabled:
+  if params.runtime.gpu_thread_mode:
     keras_utils.set_gpu_thread_mode_and_count(
         per_gpu_thread_count=params.runtime.per_gpu_thread_count,
         gpu_thread_mode=params.runtime.gpu_thread_mode,
@@ -309,13 +308,15 @@ def train_and_eval(
 
   strategy_scope = distribution_utils.get_strategy_scope(strategy)
 
-  logging.info('Detected %d devices.', strategy.num_replicas_in_sync)
+  logging.info('Detected %d devices.',
+               strategy.num_replicas_in_sync if strategy else 1)
 
   label_smoothing = params.model.loss.label_smoothing
   one_hot = label_smoothing and label_smoothing > 0
 
   builders = _get_dataset_builders(params, strategy, one_hot)
-  datasets = [builder.build() if builder else None for builder in builders]
+  datasets = [builder.build(strategy)
+              if builder else None for builder in builders]
 
   # Unpack datasets and builders based on train/val/test splits
   train_builder, validation_builder = builders  # pylint: disable=unbalanced-tuple-unpacking
@@ -351,7 +352,8 @@ def train_and_eval(
       loss_obj = tf.keras.losses.SparseCategoricalCrossentropy()
     model.compile(optimizer=optimizer,
                   loss=loss_obj,
-                  metrics=metrics)
+                  metrics=metrics,
+                  experimental_steps_per_execution=params.train.steps_per_loop)
 
     initial_epoch = 0
     if params.train.resume_checkpoint:
@@ -387,9 +389,8 @@ def train_and_eval(
       steps_per_epoch=train_steps,
       initial_epoch=initial_epoch,
       callbacks=callbacks,
-      **validation_kwargs,
-      experimental_steps_per_execution=params.train.steps_per_loop,
-      verbose=2)
+      verbose=2,
+      **validation_kwargs)
 
   validation_output = None
   if not params.evaluation.skip_eval:
@@ -439,8 +440,7 @@ def run(flags_obj: flags.FlagValues,
 
 
 def main(_):
-  with logger.benchmark_context(flags.FLAGS):
-    stats = run(flags.FLAGS)
+  stats = run(flags.FLAGS)
   if stats:
     logging.info('Run stats:\n%s', stats)
 
