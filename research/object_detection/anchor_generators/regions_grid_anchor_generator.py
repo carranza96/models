@@ -58,8 +58,8 @@ class RegionsGridAnchorGenerator(grid_anchor_generator.GridAnchorGenerator):
             raise ValueError("scales is expected to be a list of lists or tuples of same length")
         if not all([isinstance(list_item, list) or isinstance(list_item, tuple) for list_item in
                     aspect_ratios]) or not all(
-                [len(list_item) == len(scales[0]) for list_item in aspect_ratios]):
-            raise ValueError("scales is expected to be a list of lists or tuples of same length")
+                [len(list_item) == len(aspect_ratios[0]) for list_item in aspect_ratios]):
+            raise ValueError("aspect_ratios is expected to be a list of lists or tuples of same length")
         if not all([0 < list_item < 1 for list_item in regions_limits]):
             raise ValueError("regions_limits are expected to be in the range (0, 1)")
 
