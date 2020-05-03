@@ -47,7 +47,7 @@ from object_detection.core import box_list_ops
 from object_detection.core import matcher as mat
 from object_detection.core import region_similarity_calculator as sim_calc
 from object_detection.core import standard_fields as fields
-from object_detection.matchers import argmax_matcher
+from object_detection.matchers import argmax_matcher, atss_matcher
 from object_detection.matchers import bipartite_matcher
 from object_detection.utils import shape_utils
 
@@ -59,7 +59,8 @@ class TargetAssigner(object):
                similarity_calc,
                matcher,
                box_coder_instance,
-               negative_class_weight=1.0):
+               negative_class_weight=1.0
+               ):
     """Construct Object Detection Target Assigner.
 
     Args:
@@ -77,8 +78,8 @@ class TargetAssigner(object):
     """
     if not isinstance(similarity_calc, sim_calc.RegionSimilarityCalculator):
       raise ValueError('similarity_calc must be a RegionSimilarityCalculator')
-    if not isinstance(matcher, mat.Matcher):
-      raise ValueError('matcher must be a Matcher')
+    if not isinstance(matcher, mat.Matcher) and not isinstance(matcher, atss_matcher.ATSSMatcher):
+      raise ValueError('matcher must be a Matcher or ATSSMatcher')
     if not isinstance(box_coder_instance, box_coder.BoxCoder):
       raise ValueError('box_coder must be a BoxCoder')
     self._similarity_calc = similarity_calc
@@ -185,8 +186,16 @@ class TargetAssigner(object):
         [unmatched_shape_assert, labels_and_box_shapes_assert]):
       match_quality_matrix = self._similarity_calc.compare(groundtruth_boxes,
                                                            anchors)
-      match = self._matcher.match(match_quality_matrix,
-                                  valid_rows=tf.greater(groundtruth_weights, 0))
+
+      if isinstance(self._matcher, atss_matcher.ATSSMatcher):
+          match_distance_matrix = sim_calc.CenterDistanceSimilarity().compare(groundtruth_boxes, anchors)
+          match = self._matcher.match(match_quality_matrix,
+                                      valid_rows=tf.greater(groundtruth_weights, 0),
+                                      distance_matrix=match_distance_matrix)
+      else:
+          match = self._matcher.match(match_quality_matrix,
+                                      valid_rows=tf.greater(groundtruth_weights, 0))
+
       reg_targets = self._create_regression_targets(anchors,
                                                     groundtruth_boxes,
                                                     match)
@@ -426,6 +435,15 @@ def create_target_assigner(reference, stage=None,
 
   return TargetAssigner(similarity_calc, matcher, box_coder_instance,
                         negative_class_weight=negative_class_weight)
+
+
+def create_atss_target_assigner(k, negative_class_weight=1.0, use_matmul_gather=False):
+    similarity_calc = sim_calc.IouSimilarity()
+    matcher = atss_matcher.ATSSMatcher(k, use_matmul_gather)
+    box_coder_instance = faster_rcnn_box_coder.FasterRcnnBoxCoder()
+
+    return TargetAssigner(similarity_calc, matcher, box_coder_instance,
+                          negative_class_weight=negative_class_weight)
 
 
 def batch_assign(target_assigner,

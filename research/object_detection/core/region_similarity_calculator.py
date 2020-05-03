@@ -30,6 +30,7 @@ import tensorflow as tf
 
 from object_detection.core import box_list_ops
 from object_detection.core import standard_fields as fields
+from object_detection.core.box_list import BoxList
 
 
 class RegionSimilarityCalculator(six.with_metaclass(ABCMeta, object)):
@@ -157,3 +158,32 @@ class ThresholdedIouSimilarity(RegionSimilarityCalculator):
                                 row_replicated_scores, tf.zeros_like(ious))
 
     return thresholded_ious
+
+
+
+class CenterDistanceSimilarity(RegionSimilarityCalculator):
+  """Class to compute similarity based on center L2 distance (negative).
+
+  This class computes pairwise similarity between two BoxLists based on center L2 distance (negative).
+  """
+
+  def _compare(self, boxlist1, boxlist2):
+    """Compute pairwise center distance between the two BoxLists.
+
+    Args:
+      boxlist1: BoxList holding N boxes.
+      boxlist2: BoxList holding M boxes.
+
+    Returns:
+      A tensor with shape [N, M] representing pairwise center negative distances.
+    """
+
+    ycenter1, xcenter1, _, _ = BoxList.get_center_coordinates_and_sizes(boxlist1)
+    ycenter2, xcenter2, _, _ = BoxList.get_center_coordinates_and_sizes(boxlist2)
+
+    centers1 = tf.transpose(tf.stack((ycenter1, xcenter1)))
+    centers2 = tf.transpose(tf.stack((ycenter2, xcenter2)))
+
+    centers_diff = tf.expand_dims(centers1, 1) - tf.expand_dims(centers2, 0)
+    neg_l2_distance = -tf.norm(centers_diff, axis=2)
+    return neg_l2_distance

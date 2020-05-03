@@ -178,6 +178,11 @@ message FasterRcnn {
 
   // Whether to use tf.image.combined_non_max_suppression.
   optional bool use_combined_nms_in_first_stage = 40 [default = false];
+
+  // Whether to use ATSS sampling to match anchors and ground truths
+  optional bool use_atss = 41 [default = false];
+
+  optional int32 atss_k = 42 [default = 12];
 }
 
 message FasterRcnnFeatureExtractor {
