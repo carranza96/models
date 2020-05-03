@@ -133,6 +133,7 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
       mask_negative_anchors = tf.equal(tf.reduce_sum(selected_anchors, axis=0), 0)
 
       matches = tf.argmax(iou_values_positive_anchors, 0, output_type=tf.int32)
+
       matches = self._set_values_using_indicator(matches, mask_negative_anchors, -1)
 
       # TODO: Remove anchors whose center are not inside the GT box
