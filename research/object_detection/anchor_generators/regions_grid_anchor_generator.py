@@ -8,7 +8,6 @@ import tensorflow as tf
 
 from object_detection.anchor_generators import grid_anchor_generator
 from object_detection.anchor_generators.grid_anchor_generator import _center_size_bbox_to_corners_bbox
-from object_detection.core import anchor_generator
 from object_detection.core import box_list
 from object_detection.utils import ops
 
@@ -230,18 +229,19 @@ def tile_anchors_regions(regions,
     heights_grid, y_centers_grid = tf.concat([x[0] for x in vertical_grid], axis=0), tf.concat(
         [x[1] for x in vertical_grid], axis=0)
 
-    special_cases_index = []
-    special_cases_weights = []
-    special_cases_heights = []
-    for x_position, y_position, anchor_index, scale, aspect_ratio in special_cases:
-        x_index = tf.cast(x_position * tf.cast(grid_width, tf.float32), tf.int32)
-        y_index = tf.cast(y_position * tf.cast(grid_height, tf.float32), tf.int32)
-        sqrt_ar = np.sqrt(aspect_ratio)
-        special_cases_weights.append(scale / sqrt_ar * base_anchor_size[0])
-        special_cases_heights.append(scale * sqrt_ar * base_anchor_size[1])
-        special_cases_index.append([y_index, x_index, tf.cast(anchor_index, tf.int32)])
-    widths_grid = tf.tensor_scatter_nd_update(widths_grid, [[special_cases_index]], [[special_cases_weights]])
-    heights_grid = tf.tensor_scatter_nd_update(heights_grid, [[special_cases_index]], [[special_cases_heights]])
+    if special_cases:
+        special_cases_index = []
+        special_cases_weights = []
+        special_cases_heights = []
+        for x_position, y_position, anchor_index, scale, aspect_ratio in special_cases:
+            x_index = tf.cast(x_position * tf.cast(grid_width, tf.float32), tf.int32)
+            y_index = tf.cast(y_position * tf.cast(grid_height, tf.float32), tf.int32)
+            sqrt_ar = np.sqrt(aspect_ratio)
+            special_cases_weights.append(scale / sqrt_ar * base_anchor_size[0])
+            special_cases_heights.append(scale * sqrt_ar * base_anchor_size[1])
+            special_cases_index.append([y_index, x_index, tf.cast(anchor_index, tf.int32)])
+        widths_grid = tf.tensor_scatter_nd_update(widths_grid, [[special_cases_index]], [[special_cases_weights]])
+        heights_grid = tf.tensor_scatter_nd_update(heights_grid, [[special_cases_index]], [[special_cases_heights]])
 
     bbox_centers = tf.stack([y_centers_grid, x_centers_grid], axis=3)
     bbox_sizes = tf.stack([heights_grid, widths_grid], axis=3)
