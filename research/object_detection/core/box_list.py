@@ -172,8 +172,8 @@ class BoxList(object):
       ymin, xmin, ymax, xmax = tf.unstack(tf.transpose(box_corners))
       width = xmax - xmin
       height = ymax - ymin
-      ycenter = ymin + height / 2.
-      xcenter = xmin + width / 2.
+      ycenter = tf.cast(tf.cast(ymin + height / 2., tf.float16), tf.float32)
+      xcenter = tf.cast(tf.cast(xmin + width / 2., tf.float16), tf.float32)
       return [ycenter, xcenter, height, width]
 
   def transpose_coordinates(self, scope=None):

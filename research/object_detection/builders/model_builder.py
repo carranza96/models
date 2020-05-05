@@ -439,10 +439,16 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
   first_stage_anchor_generator = anchor_generator_builder.build(
       frcnn_config.first_stage_anchor_generator)
 
-  first_stage_target_assigner = target_assigner.create_target_assigner(
+  if frcnn_config.use_atss:
+    first_stage_target_assigner = target_assigner.create_atss_target_assigner(
+      k=frcnn_config.atss_k,
+      use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+  else:
+    first_stage_target_assigner = target_assigner.create_target_assigner(
       'FasterRCNN',
       'proposal',
       use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+
   first_stage_atrous_rate = frcnn_config.first_stage_atrous_rate
   if is_keras:
     first_stage_box_predictor_arg_scope_fn = (
@@ -486,10 +492,16 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
   maxpool_kernel_size = frcnn_config.maxpool_kernel_size
   maxpool_stride = frcnn_config.maxpool_stride
 
-  second_stage_target_assigner = target_assigner.create_target_assigner(
+  if frcnn_config.use_atss:
+    second_stage_target_assigner = target_assigner.create_atss_target_assigner(
+      k=frcnn_config.atss_k,
+      use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+  else:
+    second_stage_target_assigner = target_assigner.create_target_assigner(
       'FasterRCNN',
       'detection',
       use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+
   if is_keras:
     second_stage_box_predictor = box_predictor_builder.build_keras(
         hyperparams_builder.KerasLayerHyperparams,
