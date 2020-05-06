@@ -183,6 +183,9 @@ message FasterRcnn {
   optional bool use_atss = 41 [default = false];
 
   optional int32 atss_k = 42 [default = 12];
+
+  optional ClassificationLoss first_stage_objectness_loss = 43;
+
 }
 
 message FasterRcnnFeatureExtractor {
