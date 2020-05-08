@@ -81,7 +81,9 @@ class MaskRCNNBoxPredictor(box_predictor.BoxPredictor):
   def _predict(self,
                image_features,
                num_predictions_per_location,
-               prediction_stage=2):
+               prediction_stage=2,
+               extra_features=None
+               ):
     """Optionally computes encoded object locations, confidences, and masks.
 
     Predicts the heads belonging to the given prediction stage.
@@ -127,11 +129,13 @@ class MaskRCNNBoxPredictor(box_predictor.BoxPredictor):
     if prediction_stage == 2:
       predictions_dict[BOX_ENCODINGS] = self._box_prediction_head.predict(
           features=image_feature,
-          num_predictions_per_location=num_predictions_per_location[0])
+          num_predictions_per_location=num_predictions_per_location[0],
+          extra_features=extra_features)
       predictions_dict[CLASS_PREDICTIONS_WITH_BACKGROUND] = (
           self._class_prediction_head.predict(
               features=image_feature,
-              num_predictions_per_location=num_predictions_per_location[0]))
+              num_predictions_per_location=num_predictions_per_location[0],
+              extra_features=extra_features))
     elif prediction_stage == 3:
       for prediction_head in self.get_third_stage_prediction_heads():
         head_object = self._third_stage_heads[prediction_head]

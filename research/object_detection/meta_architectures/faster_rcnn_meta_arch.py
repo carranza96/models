@@ -314,6 +314,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
                maxpool_stride,
                second_stage_target_assigner,
                second_stage_mask_rcnn_box_predictor,
+               second_stage_box_predictor_extra_features,
                second_stage_batch_size,
                second_stage_sampler,
                second_stage_non_max_suppression_fn,
@@ -604,7 +605,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
           name='MaxPool2D')
 
     self._mask_rcnn_box_predictor = second_stage_mask_rcnn_box_predictor
-
+    self._second_stage_box_predictor_extra_features = second_stage_box_predictor_extra_features
     self._second_stage_batch_size = second_stage_batch_size
     self._second_stage_sampler = second_stage_sampler
 
@@ -1020,6 +1021,18 @@ class FasterRCNNMetaArch(model.DetectionModel):
     prediction_dict['num_proposals'] = num_proposals
     return prediction_dict
 
+  def compute_extra_features(self, proposal_boxes_normalized):
+      #  [ymin, xmin, ymax, xmax]
+      heights = tf.expand_dims(proposal_boxes_normalized[..., 2] - proposal_boxes_normalized[..., 0], axis=2)
+      widths = tf.expand_dims(proposal_boxes_normalized[..., 3] - proposal_boxes_normalized[..., 1], axis=2)
+      centers_y = tf.expand_dims((proposal_boxes_normalized[..., 0] + proposal_boxes_normalized[..., 2])/2, axis=2)
+      centers_x = tf.expand_dims((proposal_boxes_normalized[..., 1] + proposal_boxes_normalized[..., 3])/2, axis=2)
+
+      extra_features = tf.squeeze(tf.concat((heights, widths, centers_x, centers_y), axis=2))
+      extra_features = tf.reshape(extra_features, (self.max_num_proposals, 4))
+
+      return extra_features
+
   def _box_prediction(self, rpn_features_to_crop, proposal_boxes_normalized,
                       image_shape, true_image_shapes):
     """Predicts the output tensors from second stage of Faster R-CNN.
@@ -1081,6 +1094,10 @@ class FasterRCNNMetaArch(model.DetectionModel):
     box_classifier_features = self._extract_box_classifier_features(
         flattened_proposal_feature_maps)
 
+    extra_features = None
+    if self._second_stage_box_predictor_extra_features:
+        extra_features = self.compute_extra_features(proposal_boxes_normalized)
+
     if self._mask_rcnn_box_predictor.is_keras_model:
       box_predictions = self._mask_rcnn_box_predictor(
           [box_classifier_features],
@@ -1089,6 +1106,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
       box_predictions = self._mask_rcnn_box_predictor.predict(
           [box_classifier_features],
           num_predictions_per_location=[1],
+          extra_features=extra_features,
           scope=self.second_stage_box_predictor_scope,
           prediction_stage=2)
 
@@ -1118,6 +1136,9 @@ class FasterRCNNMetaArch(model.DetectionModel):
           refined_box_encodings, absolute_proposal_boxes, true_image_shapes))
 
     return prediction_dict
+
+
+
 
   def _raw_detections_and_feature_map_inds(
       self, refined_box_encodings, absolute_proposal_boxes, true_image_shapes):

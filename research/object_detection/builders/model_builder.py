@@ -517,6 +517,8 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
         frcnn_config.second_stage_box_predictor,
         is_training=is_training,
         num_classes=num_classes)
+  second_stage_box_predictor_extra_features = \
+      frcnn_config.second_stage_box_predictor.mask_rcnn_box_predictor.use_extra_features
   second_stage_batch_size = frcnn_config.second_stage_batch_size
   second_stage_sampler = sampler.BalancedPositiveNegativeSampler(
       positive_fraction=frcnn_config.second_stage_balance_fraction,
@@ -579,6 +581,8 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
       second_stage_classification_loss,
       'second_stage_classification_loss_weight':
       second_stage_classification_loss_weight,
+      'second_stage_box_predictor_extra_features':
+          second_stage_box_predictor_extra_features,
       'hard_example_miner': hard_example_miner,
       'add_summaries': add_summaries,
       'crop_and_resize_fn': crop_and_resize_fn,
