@@ -487,7 +487,9 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
   first_stage_loc_loss_weight = (
       frcnn_config.first_stage_localization_loss_weight)
   first_stage_obj_loss_weight = frcnn_config.first_stage_objectness_loss_weight
-
+  first_stage_objectness_loss = (
+      losses_builder.build_faster_rcnn_classification_loss(
+          frcnn_config.first_stage_objectness_loss))
   initial_crop_size = frcnn_config.initial_crop_size
   maxpool_kernel_size = frcnn_config.maxpool_kernel_size
   maxpool_stride = frcnn_config.maxpool_stride
@@ -569,6 +571,7 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
       'first_stage_max_proposals': first_stage_max_proposals,
       'first_stage_localization_loss_weight': first_stage_loc_loss_weight,
       'first_stage_objectness_loss_weight': first_stage_obj_loss_weight,
+      'first_stage_objectness_loss': first_stage_objectness_loss,
       'second_stage_target_assigner': second_stage_target_assigner,
       'second_stage_batch_size': second_stage_batch_size,
       'second_stage_sampler': second_stage_sampler,

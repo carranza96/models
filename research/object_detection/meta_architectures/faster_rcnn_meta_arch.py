@@ -308,6 +308,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
                first_stage_max_proposals,
                first_stage_localization_loss_weight,
                first_stage_objectness_loss_weight,
+               first_stage_objectness_loss,
                crop_and_resize_fn,
                initial_crop_size,
                maxpool_kernel_size,
@@ -587,8 +588,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
 
     self._first_stage_localization_loss = (
         losses.WeightedSmoothL1LocalizationLoss())
-    self._first_stage_objectness_loss = (
-        losses.WeightedSoftmaxClassificationLoss())
+    self._first_stage_objectness_loss = first_stage_objectness_loss
     self._first_stage_loc_loss_weight = first_stage_localization_loss_weight
     self._first_stage_obj_loss_weight = first_stage_objectness_loss_weight
 
@@ -2282,20 +2282,29 @@ class FasterRCNNMetaArch(model.DetectionModel):
         return self._first_stage_sampler.subsample(
             tf.cast(cls_weights, tf.bool),
             self._first_stage_minibatch_size, tf.cast(cls_targets, tf.bool))
-      batch_sampled_indices = tf.cast(shape_utils.static_or_dynamic_map_fn(
-          _minibatch_subsample_fn,
-          [batch_cls_targets, batch_cls_weights],
-          dtype=tf.bool,
-          parallel_iterations=self._parallel_iterations,
-          back_prop=True), dtype=tf.float32)
 
-      # Normalize by number of examples in sampled minibatch
-      normalizer = tf.maximum(
-          tf.reduce_sum(batch_sampled_indices, axis=1), 1.0)
+      if isinstance(self._first_stage_objectness_loss, losses.SigmoidFocalClassificationLoss):
+        # Select all anchors for loss computation
+        batch_sampled_indices = tf.ones(tf.shape(batch_cls_targets)[0])
+        # Normalize by number of anchors assigned to objects
+        normalizer = tf.reduce_sum(batch_sampled_indices, axis=1)
+
+      else:
+        batch_sampled_indices = tf.cast(shape_utils.static_or_dynamic_map_fn(
+            _minibatch_subsample_fn,
+            [batch_cls_targets, batch_cls_weights],
+            dtype=tf.bool,
+            parallel_iterations=self._parallel_iterations,
+            back_prop=True), dtype=tf.float32)
+        # Normalize by number of examples in sampled minibatch
+        normalizer = tf.maximum(
+            tf.reduce_sum(batch_sampled_indices, axis=1), 1.0)
+
       batch_one_hot_targets = tf.one_hot(
           tf.cast(batch_cls_targets, dtype=tf.int32), depth=2)
       sampled_reg_indices = tf.multiply(batch_sampled_indices,
                                         batch_reg_weights)
+
 
       losses_mask = None
       if self.groundtruth_has_field(fields.InputDataFields.is_annotated):
