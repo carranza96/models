@@ -175,6 +175,8 @@ message MaskRCNNBoxPredictor {
   // By default, mask features are resized to [`mask_height`, `mask_width`]
   // before applying convolutions and predicting masks.
   optional bool convolve_then_upsample_masks = 14 [default = false];
+
+  optional bool use_extra_features = 15 [default = false];
 }
 
 message RfcnBoxPredictor {

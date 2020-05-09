@@ -71,7 +71,7 @@ class MaskRCNNBoxHead(head.Head):
     self._box_code_size = box_code_size
     self._share_box_across_classes = share_box_across_classes
 
-  def predict(self, features, num_predictions_per_location=1):
+  def predict(self, features,  num_predictions_per_location=1, extra_features=None):
     """Predicts boxes.
 
     Args:
@@ -94,6 +94,10 @@ class MaskRCNNBoxHead(head.Head):
         features, [1, 2], keep_dims=True, name='AvgPool')
     flattened_roi_pooled_features = slim.flatten(
         spatial_averaged_roi_pooled_features)
+
+    if extra_features is not None:
+        flattened_roi_pooled_features = tf.concat((flattened_roi_pooled_features, extra_features), axis=1)
+
     if self._use_dropout:
       flattened_roi_pooled_features = slim.dropout(
           flattened_roi_pooled_features,
