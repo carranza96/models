@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+package object_detection.protos;
+
+// Configuration proto for ATSSMatcher
+message ATSSMatcher {
+
+  // Top k anchors per ground truth box
+  optional int32 k = 1 [default = 12];
+}

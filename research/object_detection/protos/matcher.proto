@@ -4,6 +4,8 @@ package object_detection.protos;
 
 import "object_detection/protos/argmax_matcher.proto";
 import "object_detection/protos/bipartite_matcher.proto";
+import "object_detection/protos/center_matcher.proto";
+import "object_detection/protos/atss_matcher.proto";
 
 // Configuration proto for the matcher to be used in the object detection
 // pipeline. See core/matcher.py for details.
@@ -11,5 +13,7 @@ message Matcher {
   oneof matcher_oneof {
     ArgMaxMatcher argmax_matcher = 1;
     BipartiteMatcher bipartite_matcher = 2;
+    ATSSMatcher atss_matcher = 3;
+    CenterMatcher center_matcher = 4;
   }
 }

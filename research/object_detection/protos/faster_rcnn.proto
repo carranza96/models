@@ -8,6 +8,7 @@ import "object_detection/protos/hyperparams.proto";
 import "object_detection/protos/image_resizer.proto";
 import "object_detection/protos/losses.proto";
 import "object_detection/protos/post_processing.proto";
+import "object_detection/protos/matcher.proto";
 
 // Configuration for Faster R-CNN models.
 // See meta_architectures/faster_rcnn_meta_arch.py and models/model_builder.py
@@ -179,12 +180,10 @@ message FasterRcnn {
   // Whether to use tf.image.combined_non_max_suppression.
   optional bool use_combined_nms_in_first_stage = 40 [default = false];
 
-  // Whether to use ATSS sampling to match anchors and ground truths
-  optional bool use_atss = 41 [default = false];
-
-  optional int32 atss_k = 42 [default = 12];
-
   optional ClassificationLoss first_stage_objectness_loss = 43;
+
+  // Matcher to match groundtruth with anchors.
+  optional Matcher matcher = 44;
 
 }
 

@@ -47,7 +47,7 @@ from object_detection.core import box_list_ops
 from object_detection.core import matcher as mat
 from object_detection.core import region_similarity_calculator as sim_calc
 from object_detection.core import standard_fields as fields
-from object_detection.matchers import argmax_matcher, atss_matcher
+from object_detection.matchers import argmax_matcher, atss_matcher,center_matcher
 from object_detection.matchers import bipartite_matcher
 from object_detection.utils import shape_utils
 
@@ -78,7 +78,8 @@ class TargetAssigner(object):
     """
     if not isinstance(similarity_calc, sim_calc.RegionSimilarityCalculator):
       raise ValueError('similarity_calc must be a RegionSimilarityCalculator')
-    if not isinstance(matcher, mat.Matcher) and not isinstance(matcher, atss_matcher.ATSSMatcher):
+    if not isinstance(matcher, mat.Matcher) and not isinstance(matcher, atss_matcher.ATSSMatcher) \
+            and not isinstance(matcher, center_matcher.CenterMatcher):
       raise ValueError('matcher must be a Matcher or ATSSMatcher')
     if not isinstance(box_coder_instance, box_coder.BoxCoder):
       raise ValueError('box_coder must be a BoxCoder')
@@ -192,6 +193,10 @@ class TargetAssigner(object):
           match = self._matcher.match(match_quality_matrix,
                                       valid_rows=tf.greater(groundtruth_weights, 0),
                                       distance_matrix=match_distance_matrix)
+      elif isinstance(self._matcher, center_matcher.CenterMatcher):
+
+          match = self._matcher.match(groundtruth_boxes, anchors, match_quality_matrix,
+                                      valid_rows=tf.greater(groundtruth_weights, 0))
       else:
           match = self._matcher.match(match_quality_matrix,
                                       valid_rows=tf.greater(groundtruth_weights, 0))
@@ -437,9 +442,17 @@ def create_target_assigner(reference, stage=None,
                         negative_class_weight=negative_class_weight)
 
 
-def create_atss_target_assigner(k, negative_class_weight=1.0, use_matmul_gather=False):
+def create_atss_target_assigner(k, negative_class_weight=1.0, force_match_for_each_row=False, use_matmul_gather=False):
     similarity_calc = sim_calc.IouSimilarity()
-    matcher = atss_matcher.ATSSMatcher(k, use_matmul_gather)
+    matcher = atss_matcher.ATSSMatcher(k, force_match_for_each_row, use_matmul_gather)
+    box_coder_instance = faster_rcnn_box_coder.FasterRcnnBoxCoder()
+
+    return TargetAssigner(similarity_calc, matcher, box_coder_instance,
+                          negative_class_weight=negative_class_weight)
+
+def create_center_target_assigner(max_assignments, negative_class_weight=1.0, force_match_for_each_row=False, use_matmul_gather=False):
+    similarity_calc = sim_calc.IouSimilarity()
+    matcher = center_matcher.CenterMatcher(max_assignments, force_match_for_each_row, use_matmul_gather)
     box_coder_instance = faster_rcnn_box_coder.FasterRcnnBoxCoder()
 
     return TargetAssigner(similarity_calc, matcher, box_coder_instance,

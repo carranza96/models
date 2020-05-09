@@ -2266,7 +2266,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
         # Select all anchors for loss computation
         batch_sampled_indices = tf.ones(tf.shape(batch_cls_targets)[0])
         # Normalize by number of anchors assigned to objects
-        normalizer = tf.reduce_sum(batch_sampled_indices, axis=1)
+        normalizer = tf.reduce_sum(batch_cls_targets)
 
       else:
         batch_sampled_indices = tf.cast(shape_utils.static_or_dynamic_map_fn(

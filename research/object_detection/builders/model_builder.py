@@ -439,10 +439,18 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
   first_stage_anchor_generator = anchor_generator_builder.build(
       frcnn_config.first_stage_anchor_generator)
 
-  if frcnn_config.use_atss:
+  if frcnn_config.matcher.WhichOneof('matcher_oneof') == 'atss_matcher':
+    matcher = frcnn_config.matcher.atss_matcher
     first_stage_target_assigner = target_assigner.create_atss_target_assigner(
-      k=frcnn_config.atss_k,
-      use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+          k=matcher.k,
+          force_match_for_each_row=True,
+          use_matmul_gather=False)
+  elif frcnn_config.matcher.WhichOneof('matcher_oneof') == 'center_matcher':
+    matcher = frcnn_config.matcher.center_matcher
+    first_stage_target_assigner = target_assigner.create_center_target_assigner(
+          max_assignments=matcher.max_assignments,
+          force_match_for_each_row=True,
+          use_matmul_gather=False)
   else:
     first_stage_target_assigner = target_assigner.create_target_assigner(
       'FasterRCNN',
@@ -494,10 +502,18 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
   maxpool_kernel_size = frcnn_config.maxpool_kernel_size
   maxpool_stride = frcnn_config.maxpool_stride
 
-  if frcnn_config.use_atss:
+  if frcnn_config.matcher.WhichOneof('matcher_oneof') == 'atss_matcher':
+    matcher = frcnn_config.matcher.atss_matcher
     second_stage_target_assigner = target_assigner.create_atss_target_assigner(
-      k=frcnn_config.atss_k,
-      use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+          k=matcher.k,
+          force_match_for_each_row=False,
+          use_matmul_gather=False)
+  elif frcnn_config.matcher.WhichOneof('matcher_oneof') == 'center_matcher':
+    matcher = frcnn_config.matcher.center_matcher
+    second_stage_target_assigner = target_assigner.create_center_target_assigner(
+          max_assignments=matcher.max_assignments,
+          force_match_for_each_row=False,
+          use_matmul_gather=False)
   else:
     second_stage_target_assigner = target_assigner.create_target_assigner(
       'FasterRCNN',

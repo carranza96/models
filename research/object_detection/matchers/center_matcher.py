@@ -13,12 +13,14 @@ This matcher is used in Fast(er)-RCNN.
 import tensorflow as tf
 import abc
 import six
+from numpy import number
 from object_detection.utils import shape_utils
 from object_detection.core.matcher import Match
+from object_detection.core import box_list
 
 
 
-class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
+class CenterMatcher(six.with_metaclass(abc.ABCMeta, object)):
   """Matcher based on highest value.
 
   This class computes matches from a similarity matrix. Each column is matched
@@ -38,19 +40,19 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
   """
 
   def __init__(self,
-               k=9,
+               max_assignments=12,
                force_match_for_each_row=False,
                use_matmul_gather=False,
                ):
     """Construct ATSSMatcher.
 
     """
-    self._k = k
+    self._max_assignments = max_assignments
     self._force_match_for_each_row = force_match_for_each_row
     self._use_matmul_gather = use_matmul_gather
 
 
-  def match(self, similarity_matrix, distance_matrix, valid_rows=None, scope=None):
+  def match(self, groundtruth_boxes, anchors, similarity_matrix, valid_rows=None, scope=None):
     """Computes matches among row and column indices and returns the result.
 
     Computes matches among the row and column indices based on the similarity
@@ -69,10 +71,10 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
     with tf.name_scope(scope, 'Match') as scope:
       if valid_rows is None:
         valid_rows = tf.ones(tf.shape(similarity_matrix)[0], dtype=tf.bool)
-      return Match(self._match(similarity_matrix, distance_matrix, valid_rows),
+      return Match(self._match(groundtruth_boxes, anchors, similarity_matrix, valid_rows),
                    self._use_matmul_gather)
 
-  def _match(self, similarity_matrix, distance_matrix, valid_rows):
+  def _match(self, groundtruth_boxes, anchors, similarity_matrix, valid_rows):
     """Tries to match each column of the similarity matrix to a row.
 
     Args:
@@ -103,18 +105,52 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
       Returns:
         matches:  int32 tensor indicating the row each column matches to.
       """
-      top_k_anchors_per_gt = tf.math.top_k(distance_matrix, k=self._k)[1]
 
-      iou_selected_anchors = tf.gather(similarity_matrix, top_k_anchors_per_gt, axis=1, batch_dims=1)
+      selected_anchors_by_center_in_area = anchor_centers_inside_gt(groundtruth_boxes, anchors)
 
-      mean_iou_selected_anchors = tf.reduce_mean(iou_selected_anchors, axis=1)
-      std_iou_selected_anchors = tf.math.reduce_std(iou_selected_anchors, axis=1)
+      ## Version 1
+      # top_k_anchors_per_gt = tf.math.top_k(tf.cast(selected_anchors_by_center_in_area,tf.float32) * similarity_matrix, k=30)[1]
+      #
+      # iou_selected_anchors = tf.gather(similarity_matrix, top_k_anchors_per_gt, axis=1, batch_dims=1)
+      #
+      # mean_iou_selected_anchors = tf.reduce_mean(iou_selected_anchors, axis=1)
+      # std_iou_selected_anchors = tf.math.reduce_std(iou_selected_anchors, axis=1)
+      #
+      # iou_thresholds = mean_iou_selected_anchors + std_iou_selected_anchors
 
-      iou_thresholds = mean_iou_selected_anchors + std_iou_selected_anchors
+      ## Version 2
+
+      num_selected_anchors_per_gt = tf.cast(tf.math.count_nonzero(selected_anchors_by_center_in_area, axis=1), tf.float32)
+
+      iou_selected_anchors = tf.cast(selected_anchors_by_center_in_area,tf.float32) * similarity_matrix
+      mean_iou_selected_anchors = tf.math.divide_no_nan(tf.reduce_sum(iou_selected_anchors, axis=1), num_selected_anchors_per_gt)
+
+      substract_mean = (iou_selected_anchors - tf.expand_dims(mean_iou_selected_anchors, axis=1)) \
+                       * tf.cast(selected_anchors_by_center_in_area, tf.float32)
+
+      std_iou_selected_anchors = tf.math.sqrt(tf.math.divide_no_nan(
+          tf.reduce_sum(tf.pow(substract_mean, 2), axis=1),
+          num_selected_anchors_per_gt))
+
+      iou_thresholds = mean_iou_selected_anchors + 2*std_iou_selected_anchors
+
+      invalid_thresholds = tf.where(tf.equal(iou_thresholds,0))
+
+      iou_thresholds = tf.tensor_scatter_nd_update(iou_thresholds, tf.cast(invalid_thresholds, tf.int32),
+                                  tf.ones(tf.shape(invalid_thresholds)[0]))
 
 
-      # Remove not selected anchors based on distance
-      # top_k_anchor indices will be [[0, 1], [1, 2]]
+
+      selected_anchors_by_threshold = tf.cast(tf.greater_equal(similarity_matrix, tf.expand_dims(iou_thresholds, 1)), tf.int32)
+
+      selected_anchors = selected_anchors_by_center_in_area * selected_anchors_by_threshold
+
+      iou_values_positive_anchors = tf.cast(selected_anchors, tf.float32) * similarity_matrix
+
+      #
+      # # # Limit to top max_assignments anchors
+      top_k_anchors_per_gt = tf.math.top_k(iou_values_positive_anchors, k=self._max_assignments)[1]
+
       # We need to create full indices like [[0, 0], [0, 1], [1, 2], [1, 1]]
       range_rows = tf.expand_dims(tf.range(0, tf.shape(top_k_anchors_per_gt)[0]), 1)  # will be [[0], [1]]
       range_rows_repeated = tf.tile(range_rows, [1, tf.shape(top_k_anchors_per_gt)[1]])  # will be [[0, 0], [1, 1]]
@@ -123,12 +159,11 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
                                axis=2)
       full_indices = tf.reshape(full_indices, [-1, 2])
 
-      selected_anchors_by_distance = tf.cast(
-          tf.scatter_nd(full_indices, tf.ones(tf.size(top_k_anchors_per_gt)), tf.shape(similarity_matrix)), tf.int32)
+      selected_anchors_by_max_assignments = tf.cast(
+          tf.scatter_nd(full_indices, tf.ones(tf.size(top_k_anchors_per_gt)), tf.shape(similarity_matrix)), tf.float32)
 
-      selected_anchors_by_threshold = tf.cast(tf.greater_equal(similarity_matrix, tf.expand_dims(iou_thresholds, 1)), tf.int32)
+      selected_anchors = tf.cast(selected_anchors, tf.float32) * selected_anchors_by_max_assignments
 
-      selected_anchors = selected_anchors_by_distance * selected_anchors_by_threshold
 
       iou_values_positive_anchors = tf.cast(selected_anchors, tf.float32) * similarity_matrix
 
@@ -137,6 +172,9 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
       matches = tf.argmax(iou_values_positive_anchors, 0, output_type=tf.int32)
 
       matches = self._set_values_using_indicator(matches, mask_negative_anchors, -1)
+
+      matches = tf.reshape(matches,[tf.shape(anchors.get())[0]])
+
 
       # TODO: Force Match for each row??
       # TODO: Should we ignore any anchor as in ArgMaxMatcher??
@@ -162,6 +200,7 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
       else:
         return matches
 
+
     if similarity_matrix.shape.is_fully_defined():
       if shape_utils.get_dim_as_int(similarity_matrix.shape[0]) == 0:
         return _match_when_rows_are_empty()
@@ -186,3 +225,51 @@ class ATSSMatcher(six.with_metaclass(abc.ABCMeta, object)):
     """
     indicator = tf.cast(indicator, x.dtype)
     return tf.add(tf.multiply(x, 1 - indicator), val * indicator)
+
+
+def anchor_centers_inside_gt(groundtruth_boxes, anchors):
+    ycenter2, xcenter2, _, _ = box_list.BoxList.get_center_coordinates_and_sizes(anchors)
+
+    # [y_min, x_min, y_max, x_max]
+    gt_boxes_tensor = groundtruth_boxes.get()
+    gt_boxes_broadcast_ymin = tf.squeeze(tf.slice(gt_boxes_tensor, (0, 0), (tf.shape(gt_boxes_tensor)[0], 1)))
+    gt_boxes_broadcast_xmin = tf.squeeze(tf.slice(gt_boxes_tensor, (0, 1), (tf.shape(gt_boxes_tensor)[0], 1)))
+    gt_boxes_broadcast_ymax = tf.squeeze(tf.slice(gt_boxes_tensor, (0, 2), (tf.shape(gt_boxes_tensor)[0], 1)))
+    gt_boxes_broadcast_xmax = tf.squeeze(tf.slice(gt_boxes_tensor, (0, 3), (tf.shape(gt_boxes_tensor)[0], 1)))
+
+    is_in_xmin = tf.greater_equal(xcenter2 - tf.transpose([gt_boxes_broadcast_xmin]), 0)
+    is_in_ymin = tf.greater_equal(ycenter2 - tf.transpose([gt_boxes_broadcast_ymin]), 0)
+    is_in_xmax = tf.less_equal(xcenter2 - tf.transpose([gt_boxes_broadcast_xmax]), 0)
+    is_in_ymax = tf.less_equal(ycenter2 - tf.transpose([gt_boxes_broadcast_ymax]), 0)
+    selected_anchors_by_center_in_area = tf.logical_and(tf.logical_and(is_in_xmin, is_in_ymin),
+                                                        tf.logical_and(is_in_xmax, is_in_ymax))
+
+    # Mask similarly to selected_anchors_by_threshold or selected_anchors_by_distance
+    selected_anchors_by_center_in_area = tf.cast(selected_anchors_by_center_in_area, tf.int32)
+    selected_anchors_by_center_in_area = \
+        tf.cond(tf.equal(tf.size(tf.shape(selected_anchors_by_center_in_area)),1),
+            lambda: tf.expand_dims(selected_anchors_by_center_in_area,axis=0),
+            lambda: selected_anchors_by_center_in_area)
+    return selected_anchors_by_center_in_area
+
+
+
+
+## Ragged tensor version
+# num_selected_anchors_per_gt = tf.expand_dims(
+#     tf.cast(tf.math.count_nonzero(selected_anchors_by_center_in_area, axis=1), tf.float32), axis=1)
+# indices = tf.where(selected_anchors_by_center_in_area)
+# ragged_iou_selected_anchors = tf.RaggedTensor.from_value_rowids(
+#     values=tf.gather_nd(similarity_matrix,indices),
+#     value_rowids=indices[...,0])
+#
+# mean_iou_selected_anchors = tf.reduce_mean(ragged_iou_selected_anchors, axis=1)
+# # iou_selected_anchors = tf.cast(selected_anchors_by_center_in_area, tf.float32) * similarity_matrix
+# # mean_iou_selected_anchors =  tf.cond(tf.equal(tf.size(tf.shape(mean_iou_selected_anchors)),1),
+# #       lambda: tf.expand_dims(mean_iou_selected_anchors,axis=1),
+# #       lambda: mean_iou_selected_anchors)
+# # substract_mean = ragged_iou_selected_anchors - tf.expand_dims(mean_iou_selected_anchors,axis=1)
+# substract_mean = tf.math.add(ragged_iou_selected_anchors, -tf.expand_dims(mean_iou_selected_anchors,axis=1))
+# std_iou_selected_anchors = tf.math.sqrt(tf.reduce_sum(tf.pow(substract_mean, 2) / num_selected_anchors_per_gt, axis=1))
+#
+# iou_thresholds = mean_iou_selected_anchors + 2*std_iou_selected_anchors
