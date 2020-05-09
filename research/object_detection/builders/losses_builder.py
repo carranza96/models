@@ -166,6 +166,24 @@ def build_faster_rcnn_classification_loss(loss_config):
     return losses.SigmoidFocalClassificationLoss(
         gamma=config.gamma,
         alpha=alpha)
+  if loss_type == 'weighted_sigmoid_reduced_focal':
+      config = loss_config.weighted_sigmoid_reduced_focal
+      alpha = None
+      if config.HasField('alpha'):
+          alpha = config.alpha
+      return losses.SigmoidReducedFocalClassificationLoss(
+          gamma=config.gamma,
+          alpha=alpha,
+          threshold=config.threshold)
+  if loss_type == 'weighted_softmax_reduced_focal':
+      config = loss_config.weighted_softmax_reduced_focal
+      alpha = None
+      if config.HasField('alpha'):
+          alpha = config.alpha
+      return losses.SoftmaxReducedFocalClassificationLoss(
+          gamma=config.gamma,
+          alpha=alpha,
+          threshold=config.threshold)
 
   # By default, Faster RCNN second stage classifier uses Softmax loss
   # with anchor-wise outputs.

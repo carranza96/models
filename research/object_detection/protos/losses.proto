@@ -104,6 +104,8 @@ message ClassificationLoss {
     WeightedSoftmaxClassificationAgainstLogitsLoss weighted_logits_softmax = 5;
     BootstrappedSigmoidClassificationLoss bootstrapped_sigmoid = 3;
     SigmoidFocalClassificationLoss weighted_sigmoid_focal = 4;
+    SigmoidReducedFocalClassificationLoss weighted_sigmoid_reduced_focal = 6;
+    SoftmaxReducedFocalClassificationLoss weighted_softmax_reduced_focal = 7;
   }
 }
 
@@ -123,6 +125,24 @@ message SigmoidFocalClassificationLoss {
   optional float gamma = 2 [default = 2.0];
   // alpha weighting factor for the loss.
   optional float alpha = 3;
+}
+
+message SigmoidReducedFocalClassificationLoss{
+   // Threshold to start modulating
+   optional float threshold = 1 [default = 0.5];
+   // modulating factor for the loss.
+   optional float gamma = 2 [default = 2.0];
+   // alpha weighting factor for the loss.
+   optional float alpha = 3;
+}
+
+message SoftmaxReducedFocalClassificationLoss{
+   // Threshold to start modulating
+   optional float threshold = 1 [default = 0.5];
+   // modulating factor for the loss.
+   optional float gamma = 2 [default = 2.0];
+   // alpha weighting factor for the loss.
+   optional float alpha = 3;
 }
 
 // Classification loss using a softmax function over class predictions.
