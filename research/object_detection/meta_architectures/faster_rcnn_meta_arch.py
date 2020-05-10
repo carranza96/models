@@ -2283,7 +2283,9 @@ class FasterRCNNMetaArch(model.DetectionModel):
             tf.cast(cls_weights, tf.bool),
             self._first_stage_minibatch_size, tf.cast(cls_targets, tf.bool))
 
-      if isinstance(self._first_stage_objectness_loss, losses.SigmoidFocalClassificationLoss):
+      if isinstance(self._first_stage_objectness_loss, losses.SigmoidFocalClassificationLoss)\
+              or isinstance(self._first_stage_objectness_loss, losses.SigmoidReducedFocalClassificationLoss
+              or isinstance(self._first_stage_objectness_loss, losses.SoftmaxReducedFocalClassificationLoss)):
         # Select all anchors for loss computation
         batch_sampled_indices = tf.ones(tf.shape(batch_cls_targets)[0])
         # Normalize by number of anchors assigned to objects
