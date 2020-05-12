@@ -364,7 +364,9 @@ def prune_small_boxes(boxlist, min_side, scope=None):
     height, width = height_width(boxlist)
     is_valid = tf.logical_and(tf.greater_equal(width, min_side),
                               tf.greater_equal(height, min_side))
-    return gather(boxlist, tf.reshape(tf.where(is_valid), [-1]))
+    valid_indices = tf.reshape(tf.where(is_valid), [-1])
+    return gather(boxlist, valid_indices), valid_indices
+
 
 
 def change_coordinate_frame(boxlist, window, scope=None):

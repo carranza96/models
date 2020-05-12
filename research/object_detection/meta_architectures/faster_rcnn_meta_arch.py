@@ -1901,8 +1901,49 @@ class FasterRCNNMetaArch(model.DetectionModel):
         groundtruth_weights = tf.ones(num_gt)
         groundtruth_weights_list.append(groundtruth_weights)
 
+    groundtruth_boxlists, groundtruth_classes_with_background_list,\
+    groundtruth_masks_list, groundtruth_weights_list = \
+        self._prune_small_boxes(groundtruth_boxlists, groundtruth_classes_with_background_list, groundtruth_masks_list, groundtruth_weights_list)
+
+    groundtruth_weights_list = self._assign_classes_weights(groundtruth_classes_with_background_list)
+
     return (groundtruth_boxlists, groundtruth_classes_with_background_list,
             groundtruth_masks_list, groundtruth_weights_list)
+
+
+  def _prune_small_boxes(self, groundtruth_boxlists, groundtruth_classes_with_background_list,
+                         groundtruth_masks_list, groundtruth_weights_list):
+
+      valid_indices_lists = []
+
+      for i, groundtruth_boxes in enumerate(groundtruth_boxlists):
+          pruned_boxlist, valid_indices = box_list_ops.prune_small_boxes(groundtruth_boxlists[i], 15)
+          groundtruth_boxlists[i] = pruned_boxlist
+          valid_indices_lists.append(valid_indices)
+
+      for i, valid_indices in enumerate(valid_indices_lists):
+          groundtruth_classes_with_background_list[i] = tf.gather(groundtruth_classes_with_background_list[i],
+                                                                         valid_indices)
+          groundtruth_weights_list[i] = tf.gather(groundtruth_weights_list[i], valid_indices)
+
+
+      return groundtruth_boxlists, groundtruth_classes_with_background_list, \
+             groundtruth_masks_list, groundtruth_weights_list
+
+  def _assign_classes_weights(self, groundtruth_classes_with_background_list):
+
+    groundtruth_weights_list = []
+    for gt_classes_with_bk in groundtruth_classes_with_background_list:
+        classes = tf.where(gt_classes_with_bk)[..., 1] - 1
+        classes_weights = [0.7, 0.9, 1]
+
+        groundtruth_weights = tf.zeros(tf.shape(classes))
+        for i in range(3):
+            groundtruth_weights += classes_weights[i] * tf.cast(tf.equal(classes, i), tf.float32)
+        groundtruth_weights_list.append(groundtruth_weights)
+
+    return groundtruth_weights_list
+
 
   def _sample_box_classifier_minibatch_single_image(
       self, proposal_boxlist, num_valid_proposals, groundtruth_boxlist,
