@@ -185,6 +185,10 @@ message FasterRcnn {
   // Matcher to match groundtruth with anchors.
   optional Matcher matcher = 44;
 
+  optional int32 prune_gt_boxes_smaller_than = 45 [default = 0];
+
+  repeated float gt_classes_weights = 46;
+
 }
 
 message FasterRcnnFeatureExtractor {

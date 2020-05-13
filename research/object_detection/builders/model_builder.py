@@ -567,6 +567,10 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
   clip_anchors_to_image = (
       frcnn_config.clip_anchors_to_image)
 
+  prune_gt_boxes_smaller_than = (frcnn_config.prune_gt_boxes_smaller_than)
+
+  gt_classes_weights = frcnn_config.gt_classes_weights
+
   common_kwargs = {
       'is_training': is_training,
       'num_classes': num_classes,
@@ -609,7 +613,9 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
       'use_static_shapes': use_static_shapes,
       'resize_masks': frcnn_config.resize_masks,
       'return_raw_detections_during_predict': (
-          frcnn_config.return_raw_detections_during_predict)
+          frcnn_config.return_raw_detections_during_predict),
+      'prune_gt_boxes_smaller_than': prune_gt_boxes_smaller_than,
+      'gt_classes_weights': gt_classes_weights
   }
 
   if (isinstance(second_stage_box_predictor,

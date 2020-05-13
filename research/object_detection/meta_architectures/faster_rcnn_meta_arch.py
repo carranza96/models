@@ -331,7 +331,9 @@ class FasterRCNNMetaArch(model.DetectionModel):
                use_static_shapes=False,
                resize_masks=True,
                freeze_batchnorm=False,
-               return_raw_detections_during_predict=False):
+               return_raw_detections_during_predict=False,
+               prune_gt_boxes_smaller_than=0,
+               gt_classes_weights=None):
     """FasterRCNNMetaArch Constructor.
 
     Args:
@@ -632,6 +634,8 @@ class FasterRCNNMetaArch(model.DetectionModel):
     self._return_raw_detections_during_predict = (
         return_raw_detections_during_predict)
 
+    self._prune_gt_boxes_smaller_than = prune_gt_boxes_smaller_than
+    self._gt_classes_weights = gt_classes_weights
   @property
   def first_stage_feature_extractor_scope(self):
     return 'FirstStageFeatureExtractor'
@@ -1901,11 +1905,13 @@ class FasterRCNNMetaArch(model.DetectionModel):
         groundtruth_weights = tf.ones(num_gt)
         groundtruth_weights_list.append(groundtruth_weights)
 
-    groundtruth_boxlists, groundtruth_classes_with_background_list,\
-    groundtruth_masks_list, groundtruth_weights_list = \
-        self._prune_small_boxes(groundtruth_boxlists, groundtruth_classes_with_background_list, groundtruth_masks_list, groundtruth_weights_list)
+    if self._prune_gt_boxes_smaller_than:
+        groundtruth_boxlists, groundtruth_classes_with_background_list,\
+        groundtruth_masks_list, groundtruth_weights_list = \
+            self._prune_small_boxes(groundtruth_boxlists, groundtruth_classes_with_background_list, groundtruth_masks_list, groundtruth_weights_list)
 
-    groundtruth_weights_list = self._assign_classes_weights(groundtruth_classes_with_background_list)
+    if self._gt_classes_weights:
+        groundtruth_weights_list = self._assign_classes_weights(groundtruth_classes_with_background_list)
 
     return (groundtruth_boxlists, groundtruth_classes_with_background_list,
             groundtruth_masks_list, groundtruth_weights_list)
@@ -1917,7 +1923,8 @@ class FasterRCNNMetaArch(model.DetectionModel):
       valid_indices_lists = []
 
       for i, groundtruth_boxes in enumerate(groundtruth_boxlists):
-          pruned_boxlist, valid_indices = box_list_ops.prune_small_boxes(groundtruth_boxlists[i], 15)
+          pruned_boxlist, valid_indices = box_list_ops.prune_small_boxes(groundtruth_boxlists[i],
+                                                                         self._prune_gt_boxes_smaller_than)
           groundtruth_boxlists[i] = pruned_boxlist
           valid_indices_lists.append(valid_indices)
 
@@ -1935,7 +1942,7 @@ class FasterRCNNMetaArch(model.DetectionModel):
     groundtruth_weights_list = []
     for gt_classes_with_bk in groundtruth_classes_with_background_list:
         classes = tf.where(gt_classes_with_bk)[..., 1] - 1
-        classes_weights = [0.7, 0.9, 1]
+        classes_weights = self._gt_classes_weights
 
         groundtruth_weights = tf.zeros(tf.shape(classes))
         for i in range(3):
