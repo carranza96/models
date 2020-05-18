@@ -30,6 +30,7 @@ from object_detection.core import balanced_positive_negative_sampler as sampler
 from object_detection.core import post_processing
 from object_detection.core import target_assigner
 from object_detection.meta_architectures import faster_rcnn_meta_arch
+from object_detection.meta_architectures import faster_rcnn_fpn_meta_arch
 from object_detection.meta_architectures import rfcn_meta_arch
 from object_detection.meta_architectures import ssd_meta_arch
 from object_detection.models import faster_rcnn_inception_resnet_v2_feature_extractor as frcnn_inc_res
@@ -38,6 +39,7 @@ from object_detection.models import faster_rcnn_inception_v2_feature_extractor a
 from object_detection.models import faster_rcnn_nas_feature_extractor as frcnn_nas
 from object_detection.models import faster_rcnn_pnas_feature_extractor as frcnn_pnas
 from object_detection.models import faster_rcnn_resnet_v1_feature_extractor as frcnn_resnet_v1
+from object_detection.models import faster_rcnn_resnet_v1_fpn_feature_extractor as frcnn_resnet_v1_fpn
 from object_detection.models import ssd_resnet_v1_fpn_feature_extractor as ssd_resnet_v1_fpn
 from object_detection.models import ssd_resnet_v1_fpn_keras_feature_extractor as ssd_resnet_v1_fpn_keras
 from object_detection.models import ssd_resnet_v1_ppn_feature_extractor as ssd_resnet_v1_ppn
@@ -116,6 +118,8 @@ FASTER_RCNN_FEATURE_EXTRACTOR_CLASS_MAP = {
     frcnn_resnet_v1.FasterRCNNResnet101FeatureExtractor,
     'faster_rcnn_resnet152':
     frcnn_resnet_v1.FasterRCNNResnet152FeatureExtractor,
+    'faster_rcnn_resnet101_fpn':
+    frcnn_resnet_v1_fpn.FasterRCNNResnet101FpnFeatureExtractor,
 }
 
 FASTER_RCNN_KERAS_FEATURE_EXTRACTOR_CLASS_MAP = {
@@ -635,6 +639,305 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
             second_stage_mask_prediction_loss_weight),
         **common_kwargs)
 
+
+def _build_faster_rcnn_fpn_feature_extractor(
+    feature_extractor_config, is_training, reuse_weights=None,
+    inplace_batchnorm_update=False):
+  """Builds a faster_rcnn_meta_arch.FasterRCNNFeatureExtractor based on config.
+
+  Args:
+    feature_extractor_config: A FasterRcnnFeatureExtractor proto config from
+      faster_rcnn.proto.
+    is_training: True if this feature extractor is being built for training.
+    reuse_weights: if the feature extractor should reuse weights.
+    inplace_batchnorm_update: Whether to update batch_norm inplace during
+      training. This is required for batch norm to work correctly on TPUs. When
+      this is false, user must add a control dependency on
+      tf.GraphKeys.UPDATE_OPS for train/loss op in order to update the batch
+      norm moving average parameters.
+
+  Returns:
+    faster_rcnn_meta_arch.FasterRCNNFeatureExtractor based on config.
+
+  Raises:
+    ValueError: On invalid feature extractor type.
+  """
+  if inplace_batchnorm_update:
+    raise ValueError('inplace batchnorm updates not supported.')
+  feature_type = feature_extractor_config.type
+  first_stage_features_stride = (
+      feature_extractor_config.first_stage_features_stride)
+  batch_norm_trainable = feature_extractor_config.batch_norm_trainable
+
+  depth_multiplier = feature_extractor_config.depth_multiplier
+  min_depth = feature_extractor_config.min_depth
+  conv_hyperparams = hyperparams_builder.build(
+      feature_extractor_config.conv_hyperparams, is_training)
+  pad_to_multiple = feature_extractor_config.pad_to_multiple
+  override_base_feature_extractor_hyperparams = (
+      feature_extractor_config.override_base_feature_extractor_hyperparams)
+
+  kwargs = {}
+
+  if feature_extractor_config.HasField('fpn'):
+    kwargs.update({
+        'fpn_min_level':
+            feature_extractor_config.fpn.min_level,
+        'fpn_max_level':
+            feature_extractor_config.fpn.max_level,
+        'additional_layer_depth':
+            feature_extractor_config.fpn.additional_layer_depth,
+    })
+
+  if feature_type not in FASTER_RCNN_FEATURE_EXTRACTOR_CLASS_MAP:
+    raise ValueError('Unknown Faster R-CNN feature_extractor: {}'.format(
+        feature_type))
+  feature_extractor_class = FASTER_RCNN_FEATURE_EXTRACTOR_CLASS_MAP[
+      feature_type]
+  return feature_extractor_class(
+      is_training, first_stage_features_stride, depth_multiplier,
+      min_depth, conv_hyperparams, pad_to_multiple,
+      batch_norm_trainable, reuse_weights=reuse_weights,
+      override_base_feature_extractor_hyperparams=override_base_feature_extractor_hyperparams,
+      **kwargs)
+
+
+
+
+def _build_faster_rcnn_fpn_model(frcnn_config, is_training, add_summaries):
+  """Builds a Faster R-CNN or R-FCN detection model based on the model config.
+
+  Builds R-FCN model if the second_stage_box_predictor in the config is of type
+  `rfcn_box_predictor` else builds a Faster R-CNN model.
+
+  Args:
+    frcnn_config: A faster_rcnn.proto object containing the config for the
+      desired FasterRCNNMetaArch or RFCNMetaArch.
+    is_training: True if this model is being built for training purposes.
+    add_summaries: Whether to add tf summaries in the model.
+
+  Returns:
+    FasterRCNNMetaArch based on the config.
+
+  Raises:
+    ValueError: If frcnn_config.type is not recognized (i.e. not registered in
+      model_class_map).
+  """
+  num_classes = frcnn_config.num_classes
+  image_resizer_fn = image_resizer_builder.build(frcnn_config.image_resizer)
+
+  is_keras = (frcnn_config.feature_extractor.type in
+              FASTER_RCNN_KERAS_FEATURE_EXTRACTOR_CLASS_MAP)
+
+  if is_keras:
+    feature_extractor = _build_faster_rcnn_keras_feature_extractor(
+        frcnn_config.feature_extractor, is_training,
+        inplace_batchnorm_update=frcnn_config.inplace_batchnorm_update)
+  else:
+    feature_extractor = _build_faster_rcnn_fpn_feature_extractor(
+        frcnn_config.feature_extractor, is_training,
+        inplace_batchnorm_update=frcnn_config.inplace_batchnorm_update)
+
+  number_of_stages = frcnn_config.number_of_stages
+  first_stage_anchor_generator = anchor_generator_builder.build(
+      frcnn_config.first_stage_anchor_generator)
+
+  if frcnn_config.matcher.WhichOneof('matcher_oneof') == 'atss_matcher':
+    matcher = frcnn_config.matcher.atss_matcher
+    first_stage_target_assigner = target_assigner.create_atss_target_assigner(
+          k=matcher.k,
+          force_match_for_each_row=True,
+          use_matmul_gather=False)
+  elif frcnn_config.matcher.WhichOneof('matcher_oneof') == 'center_matcher':
+    matcher = frcnn_config.matcher.center_matcher
+    first_stage_target_assigner = target_assigner.create_center_target_assigner(
+          max_assignments=matcher.max_assignments,
+          force_match_for_each_row=True,
+          use_matmul_gather=False)
+  else:
+    first_stage_target_assigner = target_assigner.create_target_assigner(
+      'FasterRCNN',
+      'proposal',
+      use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+
+  first_stage_atrous_rate = frcnn_config.first_stage_atrous_rate
+  if is_keras:
+    first_stage_box_predictor_arg_scope_fn = (
+        hyperparams_builder.KerasLayerHyperparams(
+            frcnn_config.first_stage_box_predictor_conv_hyperparams))
+  else:
+    first_stage_box_predictor_arg_scope_fn = hyperparams_builder.build(
+        frcnn_config.first_stage_box_predictor_conv_hyperparams, is_training)
+  first_stage_box_predictor_kernel_size = (
+      frcnn_config.first_stage_box_predictor_kernel_size)
+  first_stage_box_predictor_depth = frcnn_config.first_stage_box_predictor_depth
+  first_stage_minibatch_size = frcnn_config.first_stage_minibatch_size
+  use_static_shapes = frcnn_config.use_static_shapes and (
+      frcnn_config.use_static_shapes_for_eval or is_training)
+  first_stage_sampler = sampler.BalancedPositiveNegativeSampler(
+      positive_fraction=frcnn_config.first_stage_positive_balance_fraction,
+      is_static=(frcnn_config.use_static_balanced_label_sampler and
+                 use_static_shapes))
+  first_stage_max_proposals = frcnn_config.first_stage_max_proposals
+  if (frcnn_config.first_stage_nms_iou_threshold < 0 or
+      frcnn_config.first_stage_nms_iou_threshold > 1.0):
+    raise ValueError('iou_threshold not in [0, 1.0].')
+  if (is_training and frcnn_config.second_stage_batch_size >
+      first_stage_max_proposals):
+    raise ValueError('second_stage_batch_size should be no greater than '
+                     'first_stage_max_proposals.')
+  first_stage_non_max_suppression_fn = functools.partial(
+      post_processing.batch_multiclass_non_max_suppression,
+      score_thresh=frcnn_config.first_stage_nms_score_threshold,
+      iou_thresh=frcnn_config.first_stage_nms_iou_threshold,
+      max_size_per_class=frcnn_config.first_stage_max_proposals,
+      max_total_size=frcnn_config.first_stage_max_proposals,
+      use_static_shapes=use_static_shapes,
+      use_partitioned_nms=frcnn_config.use_partitioned_nms_in_first_stage,
+      use_combined_nms=frcnn_config.use_combined_nms_in_first_stage)
+  first_stage_loc_loss_weight = (
+      frcnn_config.first_stage_localization_loss_weight)
+  first_stage_obj_loss_weight = frcnn_config.first_stage_objectness_loss_weight
+  first_stage_objectness_loss = (
+      losses_builder.build_faster_rcnn_classification_loss(
+          frcnn_config.first_stage_objectness_loss))
+  initial_crop_size = frcnn_config.initial_crop_size
+  maxpool_kernel_size = frcnn_config.maxpool_kernel_size
+  maxpool_stride = frcnn_config.maxpool_stride
+
+  if frcnn_config.matcher.WhichOneof('matcher_oneof') == 'atss_matcher':
+    matcher = frcnn_config.matcher.atss_matcher
+    second_stage_target_assigner = target_assigner.create_atss_target_assigner(
+          k=matcher.k,
+          force_match_for_each_row=False,
+          use_matmul_gather=False)
+  elif frcnn_config.matcher.WhichOneof('matcher_oneof') == 'center_matcher':
+    matcher = frcnn_config.matcher.center_matcher
+    second_stage_target_assigner = target_assigner.create_center_target_assigner(
+          max_assignments=matcher.max_assignments,
+          force_match_for_each_row=False,
+          use_matmul_gather=False)
+  else:
+    second_stage_target_assigner = target_assigner.create_target_assigner(
+      'FasterRCNN',
+      'detection',
+      use_matmul_gather=frcnn_config.use_matmul_gather_in_matcher)
+
+  if is_keras:
+    second_stage_box_predictor = box_predictor_builder.build_keras(
+        hyperparams_builder.KerasLayerHyperparams,
+        freeze_batchnorm=False,
+        inplace_batchnorm_update=False,
+        num_predictions_per_location_list=[1],
+        box_predictor_config=frcnn_config.second_stage_box_predictor,
+        is_training=is_training,
+        num_classes=num_classes)
+  else:
+    second_stage_box_predictor = box_predictor_builder.build(
+        hyperparams_builder.build,
+        frcnn_config.second_stage_box_predictor,
+        is_training=is_training,
+        num_classes=num_classes)
+  second_stage_box_predictor_extra_features = \
+      frcnn_config.second_stage_box_predictor.mask_rcnn_box_predictor.use_extra_features
+  second_stage_batch_size = frcnn_config.second_stage_batch_size
+  second_stage_sampler = sampler.BalancedPositiveNegativeSampler(
+      positive_fraction=frcnn_config.second_stage_balance_fraction,
+      is_static=(frcnn_config.use_static_balanced_label_sampler and
+                 use_static_shapes))
+  (second_stage_non_max_suppression_fn, second_stage_score_conversion_fn
+  ) = post_processing_builder.build(frcnn_config.second_stage_post_processing)
+  second_stage_localization_loss_weight = (
+      frcnn_config.second_stage_localization_loss_weight)
+  second_stage_classification_loss = (
+      losses_builder.build_faster_rcnn_classification_loss(
+          frcnn_config.second_stage_classification_loss))
+  second_stage_classification_loss_weight = (
+      frcnn_config.second_stage_classification_loss_weight)
+  second_stage_mask_prediction_loss_weight = (
+      frcnn_config.second_stage_mask_prediction_loss_weight)
+
+  hard_example_miner = None
+  if frcnn_config.HasField('hard_example_miner'):
+    hard_example_miner = losses_builder.build_hard_example_miner(
+        frcnn_config.hard_example_miner,
+        second_stage_classification_loss_weight,
+        second_stage_localization_loss_weight)
+
+  crop_and_resize_fn = (
+      ops.matmul_crop_and_resize if frcnn_config.use_matmul_crop_and_resize
+      else ops.native_crop_and_resize)
+  clip_anchors_to_image = (
+      frcnn_config.clip_anchors_to_image)
+
+  prune_gt_boxes_smaller_than = (frcnn_config.prune_gt_boxes_smaller_than)
+
+  gt_classes_weights = frcnn_config.gt_classes_weights
+
+  common_kwargs = {
+      'is_training': is_training,
+      'num_classes': num_classes,
+      'image_resizer_fn': image_resizer_fn,
+      'feature_extractor': feature_extractor,
+      'number_of_stages': number_of_stages,
+      'first_stage_anchor_generator': first_stage_anchor_generator,
+      'first_stage_target_assigner': first_stage_target_assigner,
+      'first_stage_atrous_rate': first_stage_atrous_rate,
+      'first_stage_box_predictor_arg_scope_fn':
+      first_stage_box_predictor_arg_scope_fn,
+      'first_stage_box_predictor_kernel_size':
+      first_stage_box_predictor_kernel_size,
+      'first_stage_box_predictor_depth': first_stage_box_predictor_depth,
+      'first_stage_minibatch_size': first_stage_minibatch_size,
+      'first_stage_sampler': first_stage_sampler,
+      'first_stage_non_max_suppression_fn': first_stage_non_max_suppression_fn,
+      'first_stage_max_proposals': first_stage_max_proposals,
+      'first_stage_localization_loss_weight': first_stage_loc_loss_weight,
+      'first_stage_objectness_loss_weight': first_stage_obj_loss_weight,
+      'first_stage_objectness_loss': first_stage_objectness_loss,
+      'second_stage_target_assigner': second_stage_target_assigner,
+      'second_stage_batch_size': second_stage_batch_size,
+      'second_stage_sampler': second_stage_sampler,
+      'second_stage_non_max_suppression_fn':
+      second_stage_non_max_suppression_fn,
+      'second_stage_score_conversion_fn': second_stage_score_conversion_fn,
+      'second_stage_localization_loss_weight':
+      second_stage_localization_loss_weight,
+      'second_stage_classification_loss':
+      second_stage_classification_loss,
+      'second_stage_classification_loss_weight':
+      second_stage_classification_loss_weight,
+      'second_stage_box_predictor_extra_features':
+          second_stage_box_predictor_extra_features,
+      'hard_example_miner': hard_example_miner,
+      'add_summaries': add_summaries,
+      'crop_and_resize_fn': crop_and_resize_fn,
+      'clip_anchors_to_image': clip_anchors_to_image,
+      'use_static_shapes': use_static_shapes,
+      'resize_masks': frcnn_config.resize_masks,
+      'return_raw_detections_during_predict': (
+          frcnn_config.return_raw_detections_during_predict),
+      'prune_gt_boxes_smaller_than': prune_gt_boxes_smaller_than,
+      'gt_classes_weights': gt_classes_weights
+  }
+
+  if (isinstance(second_stage_box_predictor,
+                 rfcn_box_predictor.RfcnBoxPredictor) or
+      isinstance(second_stage_box_predictor,
+                 rfcn_keras_box_predictor.RfcnKerasBoxPredictor)):
+    return rfcn_meta_arch.RFCNMetaArch(
+        second_stage_rfcn_box_predictor=second_stage_box_predictor,
+        **common_kwargs)
+  else:
+    return faster_rcnn_fpn_meta_arch.FasterRCNNFPNMetaArch(
+        initial_crop_size=initial_crop_size,
+        maxpool_kernel_size=maxpool_kernel_size,
+        maxpool_stride=maxpool_stride,
+        second_stage_mask_rcnn_box_predictor=second_stage_box_predictor,
+        second_stage_mask_prediction_loss_weight=(
+            second_stage_mask_prediction_loss_weight),
+        **common_kwargs)
+
 EXPERIMENTAL_META_ARCH_BUILDER_MAP = {
 }
 
@@ -646,6 +949,7 @@ def _build_experimental_model(config, is_training, add_summaries=True):
 META_ARCHITECURE_BUILDER_MAP = {
     'ssd': _build_ssd_model,
     'faster_rcnn': _build_faster_rcnn_model,
+    'faster_rcnn_fpn': _build_faster_rcnn_fpn_model,
     'experimental_model': _build_experimental_model
 }
 
