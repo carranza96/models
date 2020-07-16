@@ -110,8 +110,8 @@ message ClassificationLoss {
     BootstrappedSigmoidClassificationLoss bootstrapped_sigmoid = 3;
     SigmoidFocalClassificationLoss weighted_sigmoid_focal = 4;
     PenaltyReducedLogisticFocalLoss penalty_reduced_logistic_focal_loss = 6;
-    SigmoidReducedFocalClassificationLoss weighted_sigmoid_reduced_focal = 6;
-    SoftmaxReducedFocalClassificationLoss weighted_softmax_reduced_focal = 7;
+    SigmoidReducedFocalClassificationLoss weighted_sigmoid_reduced_focal = 7;
+    SoftmaxReducedFocalClassificationLoss weighted_softmax_reduced_focal = 8;
   }
 }
 

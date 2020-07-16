@@ -12,8 +12,6 @@ message DetectionModel {
   oneof model {
     FasterRcnn faster_rcnn = 1;
     Ssd ssd = 2;
-    FasterRcnnFpn faster_rcnn_fpn = 4;
-
 
     // This can be used to define experimental models. To define your own
     // experimental meta architecture, populate a key in the
