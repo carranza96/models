@@ -5,7 +5,6 @@ package object_detection.protos;
 import "object_detection/protos/center_net.proto";
 import "object_detection/protos/faster_rcnn.proto";
 import "object_detection/protos/ssd.proto";
-import "object_detection/protos/faster_rcnn_fpn.proto";
 
 // Top level configuration for DetectionModels.
 message DetectionModel {
