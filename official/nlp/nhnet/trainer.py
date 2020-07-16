@@ -60,6 +60,7 @@ def define_flags():
       "Initial checkpoint (usually from a pre-trained BERT model).")
   flags.DEFINE_integer("train_steps", 100000, "Max train steps")
   flags.DEFINE_integer("eval_steps", 32, "Number of eval steps per run.")
+  flags.DEFINE_integer("eval_timeout", 3000, "Timeout waiting for checkpoints.")
   flags.DEFINE_integer("train_batch_size", 32, "Total batch size for training.")
   flags.DEFINE_integer("eval_batch_size", 4, "Total batch size for evaluation.")
   flags.DEFINE_integer(
@@ -162,12 +163,16 @@ def train(params, strategy, dataset=None):
   # Trains the model.
   steps_per_epoch = min(FLAGS.train_steps, FLAGS.checkpoint_interval)
   epochs = FLAGS.train_steps // steps_per_epoch
-  trainer.fit(
+  history = trainer.fit(
       x=dataset,
       steps_per_epoch=steps_per_epoch,
       epochs=epochs,
       callbacks=[summary_callback, checkpoint_callback],
       verbose=2)
+  train_hist = history.history
+  # Gets final loss from training.
+  stats = dict(training_loss=float(train_hist["training_loss"][-1]))
+  return stats
 
 
 def run():
@@ -197,9 +202,9 @@ def run():
       is_strict=False)
   stats = {}
   if "train" in FLAGS.mode:
-    train(params, strategy)
+    stats = train(params, strategy)
   if "eval" in FLAGS.mode:
-    timeout = 0 if FLAGS.mode == "train_and_eval" else 3000
+    timeout = 0 if FLAGS.mode == "train_and_eval" else FLAGS.eval_timeout
     # Uses padded decoding for TPU. Always uses cache.
     padded_decode = isinstance(strategy, tf.distribute.experimental.TPUStrategy)
     params.override({

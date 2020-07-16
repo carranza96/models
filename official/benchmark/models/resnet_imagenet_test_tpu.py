@@ -21,7 +21,6 @@ from __future__ import print_function
 from absl.testing import parameterized
 import tensorflow as tf
 from official.benchmark.models import resnet_imagenet_main
-from official.utils.misc import keras_utils
 from official.utils.testing import integration
 from official.vision.image_classification.resnet import imagenet_preprocessing
 
@@ -57,12 +56,12 @@ class KerasImagenetTest(tf.test.TestCase, parameterized.TestCase):
     super(KerasImagenetTest, self).setUp()
     imagenet_preprocessing.NUM_IMAGES["validation"] = 4
     self.policy = \
-        tf.compat.v2.keras.mixed_precision.experimental.global_policy()
+        tf.keras.mixed_precision.experimental.global_policy()
 
   def tearDown(self):
     super(KerasImagenetTest, self).tearDown()
     tf.io.gfile.rmtree(self.get_temp_dir())
-    tf.compat.v2.keras.mixed_precision.experimental.set_policy(self.policy)
+    tf.keras.mixed_precision.experimental.set_policy(self.policy)
 
   @parameterized.parameters([
       "resnet",
@@ -70,8 +69,6 @@ class KerasImagenetTest(tf.test.TestCase, parameterized.TestCase):
   ])
   def test_end_to_end_tpu(self, flags_key):
     """Test Keras model with TPU distribution strategy."""
-    config = keras_utils.get_config_proto_v1()
-    tf.compat.v1.enable_eager_execution(config=config)
 
     extra_flags = [
         "-distribution_strategy", "tpu",
@@ -89,8 +86,6 @@ class KerasImagenetTest(tf.test.TestCase, parameterized.TestCase):
   @parameterized.parameters(["resnet"])
   def test_end_to_end_tpu_bf16(self, flags_key):
     """Test Keras model with TPU and bfloat16 activation."""
-    config = keras_utils.get_config_proto_v1()
-    tf.compat.v1.enable_eager_execution(config=config)
 
     extra_flags = [
         "-distribution_strategy", "tpu",

@@ -19,7 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import functools
-import tensorflow.compat.v2 as tf
+import tensorflow as tf
 
 from official.vision.detection.ops import nms
 from official.vision.detection.utils import box_utils
@@ -288,6 +288,7 @@ def _generate_detections_batched(boxes,
          pad_per_class=False,)
     # De-normalizes box cooridinates.
     nmsed_boxes *= normalizer
+  nmsed_classes = tf.cast(nmsed_classes, tf.int32)
   return nmsed_boxes, nmsed_scores, nmsed_classes, valid_detections
 
 

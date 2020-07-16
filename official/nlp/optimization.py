@@ -13,7 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """Functions and classes related to optimization (weight updates)."""
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -21,6 +20,7 @@ from __future__ import print_function
 import re
 
 from absl import logging
+import gin
 import tensorflow as tf
 import tensorflow_addons.optimizers as tfa_optimizers
 
@@ -67,6 +67,7 @@ class WarmUp(tf.keras.optimizers.schedules.LearningRateSchedule):
     }
 
 
+@gin.configurable
 def create_optimizer(init_lr,
                      num_train_steps,
                      num_warmup_steps,
@@ -92,7 +93,7 @@ def create_optimizer(init_lr,
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-6,
-        exclude_from_weight_decay=['layer_norm', 'bias'])
+        exclude_from_weight_decay=['LayerNorm', 'layer_norm', 'bias'])
   elif optimizer_type == 'lamb':
     logging.info('using Lamb optimizer')
     optimizer = tfa_optimizers.LAMB(
@@ -101,7 +102,7 @@ def create_optimizer(init_lr,
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-6,
-        exclude_from_weight_decay=['layer_norm', 'bias'])
+        exclude_from_weight_decay=['LayerNorm', 'layer_norm', 'bias'])
   else:
     raise ValueError('Unsupported optimizer type: ', optimizer_type)
 

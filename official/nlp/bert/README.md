@@ -113,10 +113,6 @@ Second, you need to install TF 2 `tf-nightly` on your VM:
 pip install tf-nightly
 ```
 
-Warning: More details TPU-specific set-up instructions and tutorial should come
-along with official TF 2.x release for TPU. Note that this repo is not
-officially supported by Google Cloud TPU team yet until TF 2.1 released.
-
 ## Process Datasets
 
 ### Pre-training
@@ -142,6 +138,7 @@ Users can download the
 [GLUE data](https://gluebenchmark.com/tasks) by running
 [this script](https://gist.github.com/W4ngatang/60c2bdb54d156a41194446737ce03e2e)
 and unpack it to some directory `$GLUE_DIR`.
+Also, users can download [Pretrained Checkpoint](#access-to-pretrained-checkpoints) and locate on some directory `$BERT_DIR` instead of using checkpoints on Google Cloud Storage.
 
 ```shell
 export GLUE_DIR=~/glue
@@ -250,6 +247,23 @@ Alternatively, instead of specifying `init_checkpoint`, you can specify
 `hub_module_url` to employ a pretraind BERT hub module, e.g.,
 ` --hub_module_url=https://tfhub.dev/tensorflow/bert_en_uncased_L-24_H-1024_A-16/1`.
 
+After training a model, to get predictions from the classifier, you can set the
+`--mode=predict` and offer the test set tfrecords to `--eval_data_path`.
+Output will be created in file called test_results.tsv in the output folder.
+Each line will contain output for each sample, columns are the class
+probabilities.
+
+```shell
+python run_classifier.py \
+  --mode='predict' \
+  --input_meta_data_path=${GLUE_DIR}/${TASK}_meta_data \
+  --eval_data_path=${GLUE_DIR}/${TASK}_eval.tf_record \
+  --bert_config_file=${BERT_DIR}/bert_config.json \
+  --eval_batch_size=4 \
+  --model_dir=${MODEL_DIR} \
+  --distribution_strategy=mirrored
+```
+
 To use TPU, you only need to switch distribution strategy type to `tpu` with TPU
 information and use remote storage for model checkpoints.
 
@@ -314,6 +328,10 @@ python run_squad.py \
 
 Similarily, you can replace `init_checkpoint` FLAG with `hub_module_url` to
 specify a hub module path.
+
+`run_squad.py` writes the prediction for `--predict_file` by default. If you set
+the `--model=predict` and offer the SQuAD test data, the scripts will generate
+the prediction json file.
 
 To use TPU, you need switch distribution strategy type to `tpu` with TPU
 information.

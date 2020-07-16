@@ -19,42 +19,40 @@ from __future__ import division
 # from __future__ import google_type_annotations
 from __future__ import print_function
 
+import functools
+import pprint
+
+# pylint: disable=g-bad-import-order
+import tensorflow as tf
+
 from absl import app
 from absl import flags
 from absl import logging
-import functools
-import os
-import pprint
-import tensorflow.compat.v2 as tf
+# pylint: enable=g-bad-import-order
 
 from official.modeling.hyperparams import params_dict
 from official.modeling.training import distributed_executor as executor
 from official.utils import hyperparams_flags
+from official.utils.flags import core as flags_core
+from official.utils.misc import distribution_utils
+from official.utils.misc import keras_utils
 from official.vision.detection.configs import factory as config_factory
 from official.vision.detection.dataloader import input_reader
 from official.vision.detection.dataloader import mode_keys as ModeKeys
 from official.vision.detection.executor.detection_executor import DetectionDistributedExecutor
 from official.vision.detection.modeling import factory as model_factory
-from official.utils.flags import core as flags_core
-from official.utils.misc import distribution_utils
-from official.utils.misc import keras_utils
 
 hyperparams_flags.initialize_common_flags()
 flags_core.define_log_steps()
 
-flags.DEFINE_bool(
-    'enable_xla',
-    default=False,
-    help='Enable XLA for GPU')
+flags.DEFINE_bool('enable_xla', default=False, help='Enable XLA for GPU')
 
 flags.DEFINE_string(
-    'mode',
-    default='train',
-    help='Mode to run: `train`, `eval` or `train_and_eval`.')
+    'mode', default='train', help='Mode to run: `train` or `eval`.')
 
 flags.DEFINE_string(
     'model', default='retinanet',
-    help='Model to run: `retinanet` or `mask_rcnn`.')
+    help='Model to run: `retinanet`, `mask_rcnn` or `shapemask`.')
 
 flags.DEFINE_string('training_file_pattern', None,
                     'Location of the train data.')
@@ -75,7 +73,7 @@ def run_executor(params,
                  eval_input_fn=None,
                  callbacks=None,
                  prebuilt_strategy=None):
-  """Runs Retinanet model on distribution strategy defined by the user."""
+  """Runs the object detection model on distribution strategy defined by the user."""
 
   if params.architecture.use_bfloat16:
     policy = tf.compat.v2.keras.mixed_precision.experimental.Policy(
@@ -199,11 +197,25 @@ def run(callbacks=None):
           'strategy_config': executor.strategy_flags_dict(),
       },
       is_strict=False)
+
+  # Make sure use_tpu and strategy_type are in sync.
+  params.use_tpu = (params.strategy_type == 'tpu')
+
+  if not params.use_tpu:
+    params.override({
+        'architecture': {
+            'use_bfloat16': False,
+        },
+        'norm_activation': {
+            'use_sync_bn': False,
+        },
+    }, is_strict=True)
+
   params.validate()
   params.lock()
   pp = pprint.PrettyPrinter()
   params_str = pp.pformat(params.as_dict())
-  logging.info('Model Parameters: {}'.format(params_str))
+  logging.info('Model Parameters: %s', params_str)
 
   train_input_fn = None
   eval_input_fn = None

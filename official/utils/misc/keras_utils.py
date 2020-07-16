@@ -23,9 +23,7 @@ import os
 import time
 
 from absl import logging
-import tensorflow.compat.v2 as tf
-from tensorflow.python import tf2
-from tensorflow.python.profiler import profiler_v2 as profiler
+import tensorflow as tf
 
 
 class BatchTimestamp(object):
@@ -43,12 +41,13 @@ class BatchTimestamp(object):
 class TimeHistory(tf.keras.callbacks.Callback):
   """Callback for Keras models."""
 
-  def __init__(self, batch_size, log_steps, logdir=None):
+  def __init__(self, batch_size, log_steps, initial_step=0, logdir=None):
     """Callback for logging performance.
 
     Args:
       batch_size: Total batch size.
       log_steps: Interval of steps between logging of batch level stats.
+      initial_step: Optional, initial step.
       logdir: Optional directory to write TensorBoard summaries.
     """
     # TODO(wcromar): remove this parameter and rely on `logs` parameter of
@@ -56,8 +55,8 @@ class TimeHistory(tf.keras.callbacks.Callback):
     self.batch_size = batch_size
     super(TimeHistory, self).__init__()
     self.log_steps = log_steps
-    self.last_log_step = 0
-    self.steps_before_epoch = 0
+    self.last_log_step = initial_step
+    self.steps_before_epoch = initial_step
     self.steps_in_epoch = 0
     self.start_time = None
 
@@ -86,6 +85,18 @@ class TimeHistory(tf.keras.callbacks.Callback):
   def average_examples_per_second(self):
     """The average number of training examples per second across all epochs."""
     return self.average_steps_per_second * self.batch_size
+
+  def get_examples_per_sec(self, warmup=1):
+    """Calculates examples/sec through timestamp_log and skip warmup period."""
+    # First entry in timestamp_log is the start of the step 1. The rest of the
+    # entries are the end of each step recorded.
+    time_log = self.timestamp_log
+    seconds = time_log[-1].timestamp - time_log[warmup].timestamp
+    steps = time_log[-1].batch_index - time_log[warmup].batch_index
+    return self.batch_size * steps / seconds
+
+  def get_startup_time(self, start_time_sec):
+    return self.timestamp_log[0].timestamp - start_time_sec
 
   def on_train_end(self, logs=None):
     self.train_finish_time = time.time()
@@ -123,9 +134,9 @@ class TimeHistory(tf.keras.callbacks.Callback):
 
       if self.summary_writer:
         with self.summary_writer.as_default():
-          tf.summary.scalar('global_step/sec', steps_per_second,
+          tf.summary.scalar('steps_per_second', steps_per_second,
                             self.global_steps)
-          tf.summary.scalar('examples/sec', examples_per_second,
+          tf.summary.scalar('examples_per_second', examples_per_second,
                             self.global_steps)
 
       self.last_log_step = self.global_steps
@@ -137,31 +148,6 @@ class TimeHistory(tf.keras.callbacks.Callback):
 
     self.steps_before_epoch += self.steps_in_epoch
     self.steps_in_epoch = 0
-
-
-def get_profiler_callback(model_dir, profile_steps, enable_tensorboard,
-                          steps_per_epoch):
-  """Validate profile_steps flag value and return profiler callback."""
-  profile_steps_error_message = (
-      'profile_steps must be a comma separated pair of positive integers, '
-      'specifying the first and last steps to be profiled.'
-  )
-  try:
-    profile_steps = [int(i) for i in profile_steps.split(',')]
-  except ValueError:
-    raise ValueError(profile_steps_error_message)
-  if len(profile_steps) != 2:
-    raise ValueError(profile_steps_error_message)
-  start_step, stop_step = profile_steps
-  if start_step < 0 or start_step > stop_step:
-    raise ValueError(profile_steps_error_message)
-  if enable_tensorboard:
-    logging.warning(
-        'Both TensorBoard and profiler callbacks are used. Note that the '
-        'TensorBoard callback profiles the 2nd step (unless otherwise '
-        'specified). Please make sure the steps profiled by the two callbacks '
-        'do not overlap.')
-  return ProfilerCallback(model_dir, start_step, stop_step, steps_per_epoch)
 
 
 class SimpleCheckpoint(tf.keras.callbacks.Callback):
@@ -176,74 +162,13 @@ class SimpleCheckpoint(tf.keras.callbacks.Callback):
     self.checkpoint_manager.save(checkpoint_number=step_counter)
 
 
-class ProfilerCallback(tf.keras.callbacks.Callback):
-  """Save profiles in specified step range to log directory."""
-
-  def __init__(self, log_dir, start_step, stop_step, steps_per_epoch):
-    super(ProfilerCallback, self).__init__()
-    self.log_dir = log_dir
-    self.start_step = start_step
-    self.stop_step = stop_step
-    self.start_epoch = start_step // steps_per_epoch
-    self.stop_epoch = stop_step // steps_per_epoch
-    self.start_step_in_epoch = start_step % steps_per_epoch
-    self.stop_step_in_epoch = stop_step % steps_per_epoch
-    self.should_start = False
-    self.should_stop = False
-
-  def on_epoch_begin(self, epoch, logs=None):
-    if epoch == self.start_epoch:
-      self.should_start = True
-    if epoch == self.stop_epoch:
-      self.should_stop = True
-
-  def on_batch_begin(self, batch, logs=None):
-    if batch == self.start_step_in_epoch and self.should_start:
-      self.should_start = False
-      profiler.start(self.log_dir)
-      logging.info('Profiler started at Step %s', self.start_step)
-
-  def on_batch_end(self, batch, logs=None):
-    if batch == self.stop_step_in_epoch and self.should_stop:
-      self.should_stop = False
-      profiler.stop()
-      logging.info('Profiler saved profiles for steps between %s and %s to %s',
-                   self.start_step, self.stop_step, self.log_dir)
-
-
-def set_session_config(enable_eager=False,
-                       enable_xla=False):
+def set_session_config(enable_xla=False):
   """Sets the session config."""
-  if is_v2_0():
-    set_config_v2(enable_xla=enable_xla)
-  else:
-    config = get_config_proto_v1(enable_xla=enable_xla)
-    if enable_eager:
-      tf.compat.v1.enable_eager_execution(config=config)
-    else:
-      sess = tf.compat.v1.Session(config=config)
-      tf.compat.v1.keras.backend.set_session(sess)
-
-
-def get_config_proto_v1(enable_xla=False):
-  """Return config proto according to flag settings, or None to use default."""
-  config = None
-  if enable_xla:
-    config = tf.compat.v1.ConfigProto()
-    config.graph_options.optimizer_options.global_jit_level = (
-        tf.OptimizerOptions.ON_2)
-  return config
-
-
-def set_config_v2(enable_xla=False):
-  """Config eager context according to flag values using TF 2.0 API."""
   if enable_xla:
     tf.config.optimizer.set_jit(True)
 
-
-def is_v2_0():
-  """Returns true if using tf 2.0."""
-  return tf2.enabled()
+# TODO(hongkuny): remove set_config_v2 globally.
+set_config_v2 = set_session_config
 
 
 def set_gpu_thread_mode_and_count(gpu_thread_mode,

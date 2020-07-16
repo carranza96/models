@@ -18,11 +18,12 @@ from __future__ import division
 # from __future__ import google_type_annotations
 from __future__ import print_function
 
+from typing import Any, Dict, Text, List
+
 from absl import logging
 import tensorflow as tf
 import tensorflow_addons as tfa
 
-from typing import Any, Dict, Text, List
 from official.vision.image_classification import learning_rate
 from official.vision.image_classification.configs import base_configs
 
@@ -250,7 +251,8 @@ class MovingAverage(tf.keras.optimizers.Optimizer):
 def build_optimizer(
     optimizer_name: Text,
     base_learning_rate: tf.keras.optimizers.schedules.LearningRateSchedule,
-    params: Dict[Text, Any]):
+    params: Dict[Text, Any],
+    model: tf.keras.Model = None):
   """Build the optimizer based on name.
 
   Args:
@@ -261,6 +263,8 @@ def build_optimizer(
     params: String -> Any dictionary representing the optimizer params.
       This should contain optimizer specific parameters such as
       `base_learning_rate`, `decay`, etc.
+    model: The `tf.keras.Model`. This is used for the shadow copy if using
+      `MovingAverage`.
 
   Returns:
     A tf.keras.Optimizer.
@@ -322,15 +326,19 @@ def build_optimizer(
   # Moving average should be applied last, as it's applied at test time
   moving_average_decay = params.get('moving_average_decay', 0.)
   if moving_average_decay is not None and moving_average_decay > 0.:
+    if model is None:
+      raise ValueError('`model` must be provided if using `MovingAverage`.')
     logging.info('Including moving average decay.')
     optimizer = MovingAverage(
-        optimizer,
+        optimizer=optimizer,
         average_decay=moving_average_decay)
+    optimizer.shadow_copy(model)
   return optimizer
 
 
 def build_learning_rate(params: base_configs.LearningRateConfig,
                         batch_size: int = None,
+                        train_epochs: int = None,
                         train_steps: int = None):
   """Build the learning rate given the provided configuration."""
   decay_type = params.name
@@ -375,8 +383,15 @@ def build_learning_rate(params: base_configs.LearningRateConfig,
         warmup_epochs=params.warmup_epochs,
         boundaries=params.boundaries,
         multipliers=params.multipliers)
+  elif decay_type == 'cosine_with_warmup':
+    lr = learning_rate.CosineDecayWithWarmup(
+        batch_size=batch_size,
+        total_steps=train_epochs * train_steps,
+        warmup_steps=warmup_steps)
   if warmup_steps > 0:
-    if decay_type != 'piecewise_constant_with_warmup':
+    if decay_type not in [
+        'piecewise_constant_with_warmup', 'cosine_with_warmup'
+    ]:
       logging.info('Applying %d warmup steps to the learning rate',
                    warmup_steps)
       lr = learning_rate.WarmupDecaySchedule(lr, warmup_steps)

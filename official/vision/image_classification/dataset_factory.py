@@ -98,12 +98,11 @@ class DatasetConfig(base_config.Config):
     file_shuffle_buffer_size: The buffer size used for shuffling raw training
       files.
     skip_decoding: Whether to skip image decoding when loading from TFDS.
-    deterministic_train: Whether the examples in the training set should output
-      in a deterministic order.
-    use_slack: whether to introduce slack in the last prefetch. This may reduce
-      CPU contention at the start of a training step.
     cache: whether to cache to dataset examples. Can be used to avoid re-reading
       from disk on the second epoch. Requires significant memory overhead.
+    tf_data_service: The URI of a tf.data service to offload preprocessing onto
+      during training. The URI should be in the format "protocol://address",
+      e.g. "grpc://tf-data-service:5050".
     mean_subtract: whether or not to apply mean subtraction to the dataset.
     standardize: whether or not to apply standardization to the dataset.
   """
@@ -126,9 +125,8 @@ class DatasetConfig(base_config.Config):
   shuffle_buffer_size: int = 10000
   file_shuffle_buffer_size: int = 1024
   skip_decoding: bool = True
-  deterministic_train: bool = False
-  use_slack: bool = True
   cache: bool = False
+  tf_data_service: Optional[str] = None
   mean_subtract: bool = False
   standardize: bool = False
 
@@ -290,7 +288,6 @@ class DatasetBuilder:
                      '%d devices.',
                      strategy.num_replicas_in_sync,
                      self.config.num_devices)
-
       dataset = strategy.experimental_distribute_datasets_from_function(
           self._build)
     else:
@@ -320,8 +317,9 @@ class DatasetBuilder:
     if builder is None:
       raise ValueError('Unknown builder type {}'.format(self.config.builder))
 
+    self.input_context = input_context
     dataset = builder()
-    dataset = self.pipeline(dataset, input_context)
+    dataset = self.pipeline(dataset)
 
     return dataset
 
@@ -342,8 +340,9 @@ class DatasetBuilder:
       decoders['image'] = tfds.decode.SkipDecoding()
 
     read_config = tfds.ReadConfig(
-        interleave_parallel_reads=64,
-        interleave_block_length=1)
+        interleave_cycle_length=10,
+        interleave_block_length=1,
+        input_context=self.input_context)
 
     dataset = builder.as_dataset(
         split=self.config.split,
@@ -357,19 +356,15 @@ class DatasetBuilder:
   def load_records(self) -> tf.data.Dataset:
     """Return a dataset loading files with TFRecords."""
     logging.info('Using TFRecords to load data.')
-
     if self.config.filenames is None:
       if self.config.data_dir is None:
         raise ValueError('Dataset must specify a path for the data files.')
 
       file_pattern = os.path.join(self.config.data_dir,
                                   '{}*'.format(self.config.split))
-      dataset = tf.data.Dataset.list_files(file_pattern, shuffle=True)
+      dataset = tf.data.Dataset.list_files(file_pattern, shuffle=False)
     else:
       dataset = tf.data.Dataset.from_tensor_slices(self.config.filenames)
-      if self.is_training:
-        # Shuffle the input files.
-        dataset.shuffle(buffer_size=self.config.file_shuffle_buffer_size)
 
     return dataset
 
@@ -389,34 +384,37 @@ class DatasetBuilder:
                           num_parallel_calls=tf.data.experimental.AUTOTUNE)
     return dataset
 
-  def pipeline(self,
-               dataset: tf.data.Dataset,
-               input_context: tf.distribute.InputContext = None
-              ) -> tf.data.Dataset:
+  def pipeline(self, dataset: tf.data.Dataset) -> tf.data.Dataset:
     """Build a pipeline fetching, shuffling, and preprocessing the dataset.
 
     Args:
       dataset: A `tf.data.Dataset` that loads raw files.
-      input_context: An optional context provided by `tf.distribute` for
-        cross-replica training. If set with more than one replica, this
-        function assumes `use_per_replica_batch_size=True`.
 
     Returns:
       A TensorFlow dataset outputting batched images and labels.
     """
-    if input_context and input_context.num_input_pipelines > 1:
-      dataset = dataset.shard(input_context.num_input_pipelines,
-                              input_context.input_pipeline_id)
+    if (self.config.builder != 'tfds' and self.input_context
+        and self.input_context.num_input_pipelines > 1):
+      dataset = dataset.shard(self.input_context.num_input_pipelines,
+                              self.input_context.input_pipeline_id)
+      logging.info('Sharding the dataset: input_pipeline_id=%d '
+                   'num_input_pipelines=%d',
+                   self.input_context.num_input_pipelines,
+                   self.input_context.input_pipeline_id)
+
+    if self.is_training and self.config.builder == 'records':
+      # Shuffle the input files.
+      dataset.shuffle(buffer_size=self.config.file_shuffle_buffer_size)
 
     if self.is_training and not self.config.cache:
       dataset = dataset.repeat()
 
     if self.config.builder == 'records':
       # Read the data from disk in parallel
-      buffer_size = 8 * 1024 * 1024  # Use 8 MiB per file
       dataset = dataset.interleave(
-          lambda name: tf.data.TFRecordDataset(name, buffer_size=buffer_size),
-          cycle_length=16,
+          tf.data.TFRecordDataset,
+          cycle_length=10,
+          block_length=1,
           num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     if self.config.cache:
@@ -434,7 +432,7 @@ class DatasetBuilder:
     dataset = dataset.map(preprocess,
                           num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
-    if input_context and self.config.num_devices > 1:
+    if self.input_context and self.config.num_devices > 1:
       if not self.config.use_per_replica_batch_size:
         raise ValueError(
             'The builder does not support a global batch size with more than '
@@ -452,18 +450,20 @@ class DatasetBuilder:
       dataset = dataset.batch(self.global_batch_size,
                               drop_remainder=self.is_training)
 
-    if self.is_training:
-      options = tf.data.Options()
-      options.experimental_deterministic = self.config.deterministic_train
-      options.experimental_slack = self.config.use_slack
-      options.experimental_optimization.parallel_batch = True
-      options.experimental_optimization.map_fusion = True
-      options.experimental_optimization.map_vectorization.enabled = True
-      options.experimental_optimization.map_parallelization = True
-      dataset = dataset.with_options(options)
-
     # Prefetch overlaps in-feed with training
     dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+
+    if self.config.tf_data_service:
+      if not hasattr(tf.data.experimental, 'service'):
+        raise ValueError('The tf_data_service flag requires Tensorflow version '
+                         '>= 2.3.0, but the version is {}'.format(
+                             tf.__version__))
+      dataset = dataset.apply(
+          tf.data.experimental.service.distribute(
+              processing_mode='parallel_epochs',
+              service=self.config.tf_data_service,
+              job_name='resnet_train'))
+      dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
     return dataset
 
@@ -493,7 +493,6 @@ class DatasetBuilder:
     parsed = tf.io.parse_single_example(record, keys_to_features)
 
     label = tf.reshape(parsed['image/class/label'], shape=[1])
-    label = tf.cast(label, dtype=tf.int32)
 
     # Subtract one so that labels are in [0, 1000)
     label -= 1

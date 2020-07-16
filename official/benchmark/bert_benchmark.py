@@ -31,6 +31,7 @@ import tensorflow as tf
 # pylint: enable=g-bad-import-order
 
 from official.benchmark import bert_benchmark_utils as benchmark_utils
+from official.benchmark import owner_utils
 from official.nlp.bert import configs
 from official.nlp.bert import run_classifier
 from official.utils.misc import distribution_utils
@@ -52,11 +53,10 @@ class BertClassifyBenchmarkBase(benchmark_utils.BertBenchmarkBase):
   """Base class to hold methods common to test classes in the module."""
 
   def __init__(self, output_dir=None, tpu=None):
-    super(BertClassifyBenchmarkBase, self).__init__(output_dir)
+    super(BertClassifyBenchmarkBase, self).__init__(output_dir, tpu=tpu)
     self.num_epochs = None
     self.num_steps_per_epoch = None
-    self.tpu = tpu
-    FLAGS.steps_per_loop = 50
+    FLAGS.steps_per_loop = 1
 
   @flagsaver.flagsaver
   def _run_bert_classifier(self, callbacks=None, use_ds=True):
@@ -93,7 +93,7 @@ class BertClassifyBenchmarkBase(benchmark_utils.BertBenchmarkBase):
         max_seq_length,
         FLAGS.eval_batch_size,
         is_training=False)
-    run_classifier.run_bert_classifier(
+    _, summary = run_classifier.run_bert_classifier(
         strategy,
         bert_config,
         input_meta_data,
@@ -107,7 +107,9 @@ class BertClassifyBenchmarkBase(benchmark_utils.BertBenchmarkBase):
         FLAGS.init_checkpoint,
         train_input_fn,
         eval_input_fn,
+        training_callbacks=False,
         custom_callbacks=callbacks)
+    return summary
 
 
 class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
@@ -142,11 +144,9 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
                                 use_ds=True):
     """Starts BERT performance benchmark test."""
     start_time_sec = time.time()
-    self._run_bert_classifier(callbacks=[self.timer_callback], use_ds=use_ds)
+    summary = self._run_bert_classifier(
+        callbacks=[self.timer_callback], use_ds=use_ds)
     wall_time_sec = time.time() - start_time_sec
-
-    with tf.io.gfile.GFile(training_summary_path, 'rb') as reader:
-      summary = json.loads(reader.read().decode('utf-8'))
 
     # Since we do not load from any pretrained checkpoints, we ignore all
     # accuracy metrics.
@@ -211,6 +211,7 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
                                 'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path, use_ds=False)
 
+  @owner_utils.Owner('tf-model-garden')
   def benchmark_8_gpu_mrpc(self):
     """Test BERT model performance with 8 GPUs."""
 
@@ -245,8 +246,7 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
     self._run_and_report_benchmark(summary_path, use_ds=False)
 
   def benchmark_8_gpu_amp_mrpc(self):
-    """Test BERT model performance with 8 GPUs with automatic mixed precision.
-    """
+    """Test BERT model performance with 8 GPUs with automatic mixed precision."""
 
     self._setup()
     self.num_gpus = 8
@@ -264,10 +264,12 @@ class BertClassifyBenchmarkReal(BertClassifyBenchmarkBase):
                                 'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path, use_ds=False)
 
+  @owner_utils.Owner('tf-model-garden')
   def benchmark_2x2_tpu_mrpc(self):
     """Test BERT model performance with 2x2 TPU."""
 
     self._setup()
+    FLAGS.steps_per_loop = 50
     FLAGS.model_dir = self._get_model_dir('benchmark_2x2_tpu_mrpc')
     FLAGS.train_data_path = self.train_data_path
     FLAGS.eval_data_path = self.eval_data_path
@@ -289,14 +291,14 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
   `benchmark_(number of gpus)_gpu_(dataset type)` format.
   """
 
-  def __init__(self, output_dir=TMP_DIR, **kwargs):
+  def __init__(self, output_dir=TMP_DIR, tpu=None, **kwargs):
     self.train_data_path = CLASSIFIER_TRAIN_DATA_PATH
     self.eval_data_path = CLASSIFIER_EVAL_DATA_PATH
     self.bert_config_file = MODEL_CONFIG_FILE_PATH
     self.input_meta_data_path = CLASSIFIER_INPUT_META_DATA_PATH
     self.pretrained_checkpoint_path = PRETRAINED_CHECKPOINT_PATH
 
-    super(BertClassifyAccuracy, self).__init__(output_dir=output_dir)
+    super(BertClassifyAccuracy, self).__init__(output_dir=output_dir, tpu=tpu)
 
   @benchmark_wrappers.enable_runtime_flags
   def _run_and_report_benchmark(self,
@@ -306,11 +308,8 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
     """Starts BERT accuracy benchmark test."""
 
     start_time_sec = time.time()
-    self._run_bert_classifier(callbacks=[self.timer_callback])
+    summary = self._run_bert_classifier(callbacks=[self.timer_callback])
     wall_time_sec = time.time() - start_time_sec
-
-    with tf.io.gfile.GFile(training_summary_path, 'rb') as reader:
-      summary = json.loads(reader.read().decode('utf-8'))
 
     super(BertClassifyAccuracy, self)._report_benchmark(
         stats=summary,
@@ -326,6 +325,7 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
     FLAGS.bert_config_file = self.bert_config_file
     FLAGS.init_checkpoint = self.pretrained_checkpoint_path
 
+  @owner_utils.Owner('tf-model-garden')
   def benchmark_8_gpu_mrpc(self):
     """Run BERT model accuracy test with 8 GPUs.
 
@@ -345,6 +345,17 @@ class BertClassifyAccuracy(BertClassifyBenchmarkBase):
     self._setup()
     FLAGS.model_dir = self._get_model_dir('benchmark_8_gpu_mrpc_xla')
     FLAGS.enable_xla = True
+    summary_path = os.path.join(FLAGS.model_dir,
+                                'summaries/training_summary.txt')
+    self._run_and_report_benchmark(summary_path)
+
+  @owner_utils.Owner('tf-model-garden')
+  def benchmark_2x2_tpu_mrpc(self):
+    """Run BERT model accuracy test on 2x2 TPU."""
+    self._setup()
+    FLAGS.steps_per_loop = 50
+    FLAGS.model_dir = self._get_model_dir('benchmark_2x2_tpu_mrpc')
+
     summary_path = os.path.join(FLAGS.model_dir,
                                 'summaries/training_summary.txt')
     self._run_and_report_benchmark(summary_path)

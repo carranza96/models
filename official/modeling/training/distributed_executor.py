@@ -134,17 +134,6 @@ class SummaryWriter(object):
 
 class DistributedExecutor(object):
   """Interface to train and eval models with tf.distribute.Strategy.
-
-  Arguments:
-    strategy: an instance of tf.distribute.Strategy.
-    params: Model configuration needed to run distribution strategy.
-    model_fn: Keras model function. Signature:
-      (params: ParamsDict) -> tf.keras.models.Model.
-    loss_fn: loss function. Signature:
-      (y_true: Tensor, y_pred: Tensor) -> Tensor
-    metric_fn: metric function. Signature: () -> tf.keras.metrics.Metric.
-    is_multi_host: Set to True when using multi hosts for training, like multi
-      worker GPU or TPU pod (slice). Otherwise, False.
   """
 
   def __init__(self,
@@ -153,6 +142,18 @@ class DistributedExecutor(object):
                model_fn,
                loss_fn,
                is_multi_host=False):
+    """Constructor.
+
+    Args:
+      strategy: an instance of tf.distribute.Strategy.
+      params: Model configuration needed to run distribution strategy.
+      model_fn: Keras model function. Signature:
+        (params: ParamsDict) -> tf.keras.models.Model.
+      loss_fn: loss function. Signature:
+        (y_true: Tensor, y_pred: Tensor) -> Tensor
+      is_multi_host: Set to True when using multi hosts for training, like multi
+        worker GPU or TPU pod (slice). Otherwise, False.
+    """
 
     self._params = params
     self._model_fn = model_fn
@@ -224,6 +225,18 @@ class DistributedExecutor(object):
                               loss_fn,
                               optimizer,
                               metric=None):
+    """Creates a single training step.
+
+    Args:
+      strategy: an instance of tf.distribute.Strategy.
+      model: (Tensor, bool) -> Tensor. model function.
+      loss_fn: (y_true: Tensor, y_pred: Tensor) -> Tensor.
+      optimizer: tf.keras.optimizers.Optimizer.
+      metric: tf.keras.metrics.Metric subclass.
+
+    Returns:
+      The training step callable.
+    """
     metrics = metrics_as_dict(metric)
 
     def _replicated_step(inputs):
@@ -252,19 +265,18 @@ class DistributedExecutor(object):
                          metric=None):
     """Creates a distributed training step.
 
-      Args:
-        strategy: an instance of tf.distribute.Strategy.
-        model: (Tensor, bool) -> Tensor. model function.
-        loss_fn: (y_true: Tensor, y_pred: Tensor) -> Tensor.
-        optimizer: tf.keras.optimizers.Optimizer.
-        iterator: an iterator that yields input tensors.
-        metric: tf.keras.metrics.Metric subclass.
+    Args:
+      strategy: an instance of tf.distribute.Strategy.
+      model: (Tensor, bool) -> Tensor. model function.
+      loss_fn: (y_true: Tensor, y_pred: Tensor) -> Tensor.
+      optimizer: tf.keras.optimizers.Optimizer.
+      metric: tf.keras.metrics.Metric subclass.
 
-      Returns:
-        The training step callable.
+    Returns:
+      The training step callable.
     """
-    _replicated_step = self._create_replicated_step(strategy, model, loss_fn,
-                                                    optimizer, metric)
+    replicated_step = self._create_replicated_step(strategy, model, loss_fn,
+                                                   optimizer, metric)
 
     @tf.function
     def train_step(iterator, num_steps):
@@ -282,10 +294,10 @@ class DistributedExecutor(object):
                          'retracing.')
 
       per_replica_losses = strategy.run(
-          _replicated_step, args=(next(iterator),))
+          replicated_step, args=(next(iterator),))
       for _ in tf.range(num_steps - 1):
         per_replica_losses = strategy.run(
-            _replicated_step, args=(next(iterator),))
+            replicated_step, args=(next(iterator),))
 
       # For reporting, we returns the mean of losses.
       losses = tf.nest.map_structure(
@@ -318,7 +330,6 @@ class DistributedExecutor(object):
 
     return test_step
 
-
   def train(self,
             train_input_fn: Callable[[params_dict.ParamsDict], tf.data.Dataset],
             eval_input_fn: Callable[[params_dict.ParamsDict],
@@ -332,6 +343,7 @@ class DistributedExecutor(object):
                                         SummaryWriter] = SummaryWriter,
             init_checkpoint: Callable[[tf.keras.Model], Any] = None,
             custom_callbacks: List[tf.keras.callbacks.Callback] = None,
+            continuous_eval: bool = False,
             save_config: bool = True):
     """Runs distributed training.
 
@@ -351,8 +363,10 @@ class DistributedExecutor(object):
       custom_callbacks: A list of Keras Callbacks objects to run during
         training. More specifically, `on_batch_begin()`, `on_batch_end()`,
         methods are invoked during training.
+      continuous_eval: If `True`, will continously run evaluation on every
+        available checkpoints. If `False`, will do the evaluation once after the
+        final step.
       save_config: bool. Whether to save params to model_dir.
-
     Returns:
       The training loss and eval metrics.
     """
@@ -403,7 +417,9 @@ class DistributedExecutor(object):
     # input pipeline ops in worker task.
     train_iterator = self._get_input_iterator(train_input_fn, strategy)
     train_loss = None
+    train_metric_result = None
     eval_metric_result = None
+    tf.keras.backend.set_learning_phase(1)
     with strategy.scope():
       # To correctly place the model weights on accelerators,
       # model and optimizer should be created in scope.
@@ -518,7 +534,7 @@ class DistributedExecutor(object):
                          checkpoint_name.format(step=current_step))
         last_save_checkpoint_step = current_step
 
-      if test_step:
+      if continuous_eval and current_step < total_steps and test_step:
         eval_iterator = self._get_input_iterator(eval_input_fn, strategy)
         eval_metric_result = self._run_evaluation(test_step, current_step,
                                                   eval_metric, eval_iterator)
@@ -550,7 +566,7 @@ class DistributedExecutor(object):
     self.train_summary_writer.close()
     self.eval_summary_writer.close()
 
-    return train_loss, eval_metric_result
+    return train_metric_result, eval_metric_result
 
   def _run_evaluation(self, test_step, current_training_step, metric,
                       test_iterator):
@@ -561,15 +577,20 @@ class DistributedExecutor(object):
           test_iterator, metric)
       return None
     logging.info('Running evaluation after step: %s.', current_training_step)
+    eval_step = 0
     while True:
       try:
-        test_step(test_iterator)
+        with tf.experimental.async_scope():
+          test_step(test_iterator)
+          eval_step += 1
       except (StopIteration, tf.errors.OutOfRangeError):
+        tf.experimental.async_clear_error()
         break
 
     metric_result = metric_results(metric)
-    logging.info('Step: [%d] Validation metric = %f', current_training_step,
-                 metric_result)
+    logging.info('Total eval steps: [%d]', eval_step)
+    logging.info('At training step: [%r] Validation metric = %r',
+                 current_training_step, metric_result)
     return metric_result
 
   def evaluate_from_model_dir(
@@ -584,10 +605,10 @@ class DistributedExecutor(object):
     """Runs distributed evaluation on model folder.
 
     Args:
+      model_dir: the folder for storing model checkpoints.
       eval_input_fn: (Optional) same type as train_input_fn. If not None, will
         trigger evaluting metric on eval data. If None, will not run eval step.
       eval_metric_fn: metric_fn for evaluation in test_step.
-      model_dir: the folder for storing model checkpoints.
       total_steps: total training steps. If the current step reaches the
         total_steps, the evaluation loop will stop.
       eval_timeout: The maximum number of seconds to wait between checkpoints.
@@ -638,11 +659,11 @@ class DistributedExecutor(object):
     """Runs distributed evaluation on the one checkpoint.
 
     Args:
+      checkpoint_path: the checkpoint to evaluate.
       eval_input_fn: (Optional) same type as train_input_fn. If not None, will
         trigger evaluting metric on eval data. If None, will not run eval step.
       eval_metric_fn: metric_fn for evaluation in test_step.
-      checkpoint_path: the checkpoint to evaluate.
-      summary_writer_fn: function to create summary writer.
+      summary_writer: function to create summary writer.
 
     Returns:
       Eval metrics dictionary of the last checkpoint.
@@ -651,6 +672,8 @@ class DistributedExecutor(object):
       raise ValueError('if `eval_metric_fn` is specified, '
                        'eval_metric_fn must be a callable.')
 
+    old_phrase = tf.keras.backend.learning_phase()
+    tf.keras.backend.set_learning_phase(0)
     params = self._params
     strategy = self._strategy
     # To reduce unnecessary send/receive input pipeline operation, we place
@@ -686,6 +709,7 @@ class DistributedExecutor(object):
       summary_writer(metrics=eval_metric_result, step=current_step)
       reset_states(eval_metric)
 
+    tf.keras.backend.set_learning_phase(old_phrase)
     return eval_metric_result, current_step
 
   def predict(self):
@@ -726,18 +750,20 @@ class ExecutorBuilder(object):
         model_fn=my_model_fn,
         loss_fn=my_loss_fn,
         metric_fn=my_metric_fn)
-
-  Args:
-    strategy_type: string. One of 'tpu', 'mirrored', 'multi_worker_mirrored'. If
-      None. User is responsible to set the strategy before calling
-      build_executor(...).
-    strategy_config: necessary config for constructing the proper Strategy.
-      Check strategy_flags_dict() for examples of the structure.
   """
 
   def __init__(self, strategy_type=None, strategy_config=None):
     _ = distribution_utils.configure_cluster(
         strategy_config.worker_hosts, strategy_config.task_index)
+    """Constructor.
+
+    Args:
+      strategy_type: string. One of 'tpu', 'mirrored', 'multi_worker_mirrored'.
+        If None. User is responsible to set the strategy before calling
+        build_executor(...).
+      strategy_config: necessary config for constructing the proper Strategy.
+        Check strategy_flags_dict() for examples of the structure.
+    """
     self._strategy = distribution_utils.get_distribution_strategy(
         distribution_strategy=strategy_type,
         num_gpus=strategy_config.num_gpus,
@@ -754,7 +780,6 @@ class ExecutorBuilder(object):
   def strategy(self, new_strategy):
     """Sets default summary writer for the current thread."""
     self._strategy = new_strategy
-
 
   def build_executor(self,
                      class_ctor=DistributedExecutor,

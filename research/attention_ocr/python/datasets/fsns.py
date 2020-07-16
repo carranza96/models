@@ -22,7 +22,7 @@ import tensorflow as tf
 from tensorflow.contrib import slim
 import logging
 
-DEFAULT_DATASET_DIR = os.path.join(os.path.dirname(__file__), 'data/fsns')
+DEFAULT_DATASET_DIR = os.path.join(os.path.dirname(__file__), 'data', 'fsns')
 
 # The dataset configuration, should be used only as a default value.
 DEFAULT_CONFIG = {
@@ -177,6 +177,8 @@ def get_split(split_name, dataset_dir=None, config=None):
       items_to_descriptions=config['items_to_descriptions'],
       #  additional parameters for convenience.
       charset=charset,
+      charset_file=charset_file,
+      image_shape=config['image_shape'],
       num_char_classes=len(charset),
       num_of_views=config['num_of_views'],
       max_sequence_length=config['max_sequence_length'],

@@ -28,7 +28,6 @@ import tensorflow as tf
 import tensorflow_model_optimization as tfmot
 from official.modeling import performance
 from official.utils.flags import core as flags_core
-from official.utils.logs import logger
 from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 from official.utils.misc import model_helpers
@@ -52,7 +51,6 @@ def run(flags_obj):
     Dictionary of training and eval stats.
   """
   keras_utils.set_session_config(
-      enable_eager=flags_obj.enable_eager,
       enable_xla=flags_obj.enable_xla)
 
   # Execute flag override logic for better model performance
@@ -219,7 +217,6 @@ def run(flags_obj):
   train_epochs = flags_obj.train_epochs
 
   callbacks = common.get_callbacks(
-      steps_per_epoch=steps_per_epoch,
       pruning_method=flags_obj.pruning_method,
       enable_checkpoint_and_export=flags_obj.enable_checkpoint_and_export,
       model_dir=flags_obj.model_dir)
@@ -294,8 +291,7 @@ def define_imagenet_keras_flags():
 
 def main(_):
   model_helpers.apply_clean(flags.FLAGS)
-  with logger.benchmark_context(flags.FLAGS):
-    stats = run(flags.FLAGS)
+  stats = run(flags.FLAGS)
   logging.info('Run stats:\n%s', stats)
 
 

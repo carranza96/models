@@ -37,23 +37,22 @@ from official.recommendation import movielens
 from official.recommendation import ncf_common
 from official.recommendation import ncf_input_pipeline
 from official.recommendation import neumf_model
-from official.utils.logs import logger
-from official.utils.logs import mlperf_helper
+from official.utils.flags import core as flags_core
 from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 from official.utils.misc import model_helpers
-from official.utils.flags import core as flags_core
+
 
 FLAGS = flags.FLAGS
 
 
-def metric_fn(logits, dup_mask, params):
+def metric_fn(logits, dup_mask, match_mlperf):
   dup_mask = tf.cast(dup_mask, tf.float32)
   logits = tf.slice(logits, [0, 1], [-1, -1])
   in_top_k, _, metric_weights, _ = neumf_model.compute_top_k_and_ndcg(
       logits,
       dup_mask,
-      params["match_mlperf"])
+      match_mlperf)
   metric_weights = tf.cast(metric_weights, tf.float32)
   return in_top_k, metric_weights
 
@@ -61,9 +60,16 @@ def metric_fn(logits, dup_mask, params):
 class MetricLayer(tf.keras.layers.Layer):
   """Custom layer of metrics for NCF model."""
 
-  def __init__(self, params):
+  def __init__(self, match_mlperf):
     super(MetricLayer, self).__init__()
-    self.params = params
+    self.match_mlperf = match_mlperf
+
+  def get_config(self):
+    return {"match_mlperf": self.match_mlperf}
+
+  @classmethod
+  def from_config(cls, config, custom_objects=None):
+    return cls(**config)
 
   def call(self, inputs, training=False):
     logits, dup_mask = inputs
@@ -72,7 +78,7 @@ class MetricLayer(tf.keras.layers.Layer):
       hr_sum = 0.0
       hr_count = 0.0
     else:
-      metric, metric_weights = metric_fn(logits, dup_mask, self.params)
+      metric, metric_weights = metric_fn(logits, dup_mask, self.match_mlperf)
       hr_sum = tf.reduce_sum(metric * metric_weights)
       hr_count = tf.reduce_sum(metric_weights)
 
@@ -90,6 +96,13 @@ class LossLayer(tf.keras.layers.Layer):
     self.loss_normalization_factor = loss_normalization_factor
     self.loss = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction="sum")
+
+  def get_config(self):
+    return {"loss_normalization_factor": self.loss_normalization_factor}
+
+  @classmethod
+  def from_config(cls, config, custom_objects=None):
+    return cls(**config)
 
   def call(self, inputs):
     logits, labels, valid_pt_mask_input = inputs
@@ -178,7 +191,8 @@ def _get_keras_model(params):
   # Custom training loop calculates loss and metric as a part of
   # training/evaluation step function.
   if not params["keras_use_ctl"]:
-    softmax_logits = MetricLayer(params)([softmax_logits, dup_mask_input])
+    softmax_logits = MetricLayer(
+        params["match_mlperf"])([softmax_logits, dup_mask_input])
     # TODO(b/134744680): Use model.add_loss() instead once the API is well
     # supported.
     softmax_logits = LossLayer(batch_size)(
@@ -222,14 +236,6 @@ def run_ncf(_):
   params = ncf_common.parse_flags(FLAGS)
   params["distribute_strategy"] = strategy
 
-  if not keras_utils.is_v2_0() and strategy is not None:
-    logging.error("NCF Keras only works with distribution strategy in TF 2.0")
-    return
-  if (params["keras_use_ctl"] and (
-      not keras_utils.is_v2_0() or strategy is None)):
-    logging.error(
-        "Custom training loop only works with tensorflow 2.0 and dist strat.")
-    return
   if params["use_tpu"] and not params["keras_use_ctl"]:
     logging.error("Custom training loop must be used when using TPUStrategy.")
     return
@@ -419,7 +425,7 @@ def run_ncf_custom_training(params,
       softmax_logits = keras_model(features)
       in_top_k, metric_weights = metric_fn(softmax_logits,
                                            features[rconst.DUPLICATE_MASK],
-                                           params)
+                                           params["match_mlperf"])
       hr_sum = tf.reduce_sum(in_top_k * metric_weights)
       hr_count = tf.reduce_sum(metric_weights)
       return hr_sum, hr_count
@@ -551,10 +557,7 @@ def build_stats(loss, eval_result, time_callback):
 
 
 def main(_):
-  with logger.benchmark_context(FLAGS), \
-      mlperf_helper.LOGGER(FLAGS.output_ml_perf_compliance_logging):
-    mlperf_helper.set_ncf_root(os.path.split(os.path.abspath(__file__))[0])
-    run_ncf(FLAGS)
+  logging.info("Result is %s", run_ncf(FLAGS))
 
 
 if __name__ == "__main__":

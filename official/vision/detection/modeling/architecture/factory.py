@@ -23,6 +23,7 @@ from official.vision.detection.modeling.architecture import heads
 from official.vision.detection.modeling.architecture import identity
 from official.vision.detection.modeling.architecture import nn_ops
 from official.vision.detection.modeling.architecture import resnet
+from official.vision.detection.modeling.architecture import spinenet
 
 
 def norm_activation_generator(params):
@@ -42,6 +43,9 @@ def backbone_generator(params):
         activation=params.norm_activation.activation,
         norm_activation=norm_activation_generator(
             params.norm_activation))
+  elif params.architecture.backbone == 'spinenet':
+    spinenet_params = params.spinenet
+    backbone_fn = spinenet.SpineNetBuilder(model_id=spinenet_params.model_id)
   else:
     raise ValueError('Backbone model `{}` is not supported.'
                      .format(params.architecture.backbone))
@@ -85,8 +89,8 @@ def retinanet_head_generator(params):
 
 
 def rpn_head_generator(params):
-  head_params = params.rpn_head
   """Generator function for RPN head architecture."""
+  head_params = params.rpn_head
   return heads.RpnHead(
       params.architecture.min_level,
       params.architecture.max_level,
@@ -126,3 +130,38 @@ def mask_rcnn_head_generator(params):
       params.norm_activation.activation,
       head_params.use_batch_norm,
       norm_activation=norm_activation_generator(params.norm_activation))
+
+
+def shapeprior_head_generator(params):
+  """Generator function for shape prior head architecture."""
+  head_params = params.shapemask_head
+  return heads.ShapemaskPriorHead(
+      params.architecture.num_classes,
+      head_params.num_downsample_channels,
+      head_params.mask_crop_size,
+      head_params.use_category_for_mask,
+      head_params.shape_prior_path)
+
+
+def coarsemask_head_generator(params):
+  """Generator function for ShapeMask coarse mask head architecture."""
+  head_params = params.shapemask_head
+  return heads.ShapemaskCoarsemaskHead(
+      params.architecture.num_classes,
+      head_params.num_downsample_channels,
+      head_params.mask_crop_size,
+      head_params.use_category_for_mask,
+      head_params.num_convs,
+      norm_activation=norm_activation_generator(params.norm_activation))
+
+
+def finemask_head_generator(params):
+  """Generator function for Shapemask fine mask head architecture."""
+  head_params = params.shapemask_head
+  return heads.ShapemaskFinemaskHead(
+      params.architecture.num_classes,
+      head_params.num_downsample_channels,
+      head_params.mask_crop_size,
+      head_params.use_category_for_mask,
+      head_params.num_convs,
+      head_params.upsample_factor)

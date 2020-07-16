@@ -1,5 +1,9 @@
 ## Attention-based Extraction of Structured Information from Street View Imagery
 
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/attention-based-extraction-of-structured/optical-character-recognition-on-fsns-test)](https://paperswithcode.com/sota/optical-character-recognition-on-fsns-test?p=attention-based-extraction-of-structured)
+[![Paper](http://img.shields.io/badge/paper-arXiv.1704.03549-B3181B.svg)](https://arxiv.org/abs/1704.03549)
+[![TensorFlow 1.15](https://img.shields.io/badge/tensorflow-1.15-brightgreen)](https://github.com/tensorflow/tensorflow/releases/tag/v1.15.0)
+
 *A TensorFlow model for real-world image text extraction problems.*
 
 This folder contains the code needed to train a new Attention OCR model on the
@@ -13,12 +17,12 @@ Imagery"](https://arxiv.org/abs/1704.03549)
 
 ## Contacts
 
-Authors:
-Zbigniew Wojna <zbigniewwojna@gmail.com>,
-Alexander Gorban <gorban@google.com>
+Authors
 
-Pull requests:
-[alexgorban](https://github.com/alexgorban)
+* Zbigniew Wojna (zbigniewwojna@gmail.com)
+* Alexander Gorban (gorban@google.com)
+
+Maintainer: Xavier Gibert [@xavigibert](https://github.com/xavigibert)
 
 ## Requirements
 
@@ -162,6 +166,14 @@ implement one in Python or C++.
 
 The recommended way is to use the [Serving infrastructure][serving].
 
+To export to SavedModel format:
+
+```
+python model_export.py \
+  --checkpoint=model.ckpt-399731 \
+  --export_dir=/tmp/attention_ocr_export
+```
+
 Alternatively you can:
 1. define a placeholder for images (or use directly an numpy array)
 2. [create a graph ](https://github.com/tensorflow/models/blob/master/research/attention_ocr/python/eval.py#L60)
@@ -184,7 +196,7 @@ other than a one time experiment please use the [TensorFlow Serving][serving].
 
 [1]: https://github.com/tensorflow/tensorflow/blob/aaf7adc/tensorflow/contrib/rnn/python/tools/checkpoint_convert.py
 [2]: https://www.tensorflow.org/api_docs/python/tf/contrib/framework/assign_from_checkpoint_fn
-[serving]: https://tensorflow.github.io/serving/serving_basic
+[serving]: https://www.tensorflow.org/tfx/serving/serving_basic
 
 ## Disclaimer
 
