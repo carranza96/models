@@ -96,3 +96,4 @@ ENV/
 
 # For mac
 .DS_Store
+/research/object_detection/protos/*.py
