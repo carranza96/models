@@ -1,4 +1,3 @@
-# Lint as: python3
 # Copyright 2020 The Orbit Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -433,7 +432,7 @@ def train_function_with_summaries(*args, **kwargs):
   return decorator
 
 
-def get_value(x) -> np.ndarray:
+def get_value(x) -> np.number:
   """Returns the value of a variable/tensor.
 
   Args:

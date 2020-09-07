@@ -22,6 +22,7 @@ from __future__ import print_function
 import tensorflow as tf
 
 from official.modeling import activations
+from official.nlp import keras_nlp
 from official.nlp.modeling import layers
 
 
@@ -53,9 +54,6 @@ class AlbertTransformerEncoder(tf.keras.Model):
     num_layers: The number of transformer layers.
     num_attention_heads: The number of attention heads for each transformer. The
       hidden size must be divisible by the number of attention heads.
-    sequence_length: The sequence length that this encoder expects. If None, the
-      sequence length is dynamic; if an integer, the encoder will require
-      sequences padded to this length.
     max_sequence_length: The maximum sequence length that this encoder can
       consume. If None, max_sequence_length uses the value from sequence length.
       This determines the variable shape for positional embeddings.
@@ -74,8 +72,7 @@ class AlbertTransformerEncoder(tf.keras.Model):
                hidden_size=768,
                num_layers=12,
                num_attention_heads=12,
-               sequence_length=512,
-               max_sequence_length=None,
+               max_sequence_length=512,
                type_vocab_size=16,
                intermediate_size=3072,
                activation=activations.gelu,
@@ -86,8 +83,6 @@ class AlbertTransformerEncoder(tf.keras.Model):
     activation = tf.keras.activations.get(activation)
     initializer = tf.keras.initializers.get(initializer)
 
-    if not max_sequence_length:
-      max_sequence_length = sequence_length
     self._self_setattr_tracking = False
     self._config_dict = {
         'vocab_size': vocab_size,
@@ -95,7 +90,6 @@ class AlbertTransformerEncoder(tf.keras.Model):
         'hidden_size': hidden_size,
         'num_layers': num_layers,
         'num_attention_heads': num_attention_heads,
-        'sequence_length': sequence_length,
         'max_sequence_length': max_sequence_length,
         'type_vocab_size': type_vocab_size,
         'intermediate_size': intermediate_size,
@@ -106,11 +100,11 @@ class AlbertTransformerEncoder(tf.keras.Model):
     }
 
     word_ids = tf.keras.layers.Input(
-        shape=(sequence_length,), dtype=tf.int32, name='input_word_ids')
+        shape=(None,), dtype=tf.int32, name='input_word_ids')
     mask = tf.keras.layers.Input(
-        shape=(sequence_length,), dtype=tf.int32, name='input_mask')
+        shape=(None,), dtype=tf.int32, name='input_mask')
     type_ids = tf.keras.layers.Input(
-        shape=(sequence_length,), dtype=tf.int32, name='input_type_ids')
+        shape=(None,), dtype=tf.int32, name='input_type_ids')
 
     if embedding_width is None:
       embedding_width = hidden_size
@@ -122,10 +116,9 @@ class AlbertTransformerEncoder(tf.keras.Model):
     word_embeddings = self._embedding_layer(word_ids)
 
     # Always uses dynamic slicing for simplicity.
-    self._position_embedding_layer = layers.PositionEmbedding(
+    self._position_embedding_layer = keras_nlp.PositionEmbedding(
         initializer=initializer,
-        use_dynamic_slicing=True,
-        max_sequence_length=max_sequence_length,
+        max_length=max_sequence_length,
         name='position_embedding')
     position_embeddings = self._position_embedding_layer(word_embeddings)
 
@@ -159,12 +152,12 @@ class AlbertTransformerEncoder(tf.keras.Model):
 
     data = embeddings
     attention_mask = layers.SelfAttentionMask()([data, mask])
-    shared_layer = layers.Transformer(
+    shared_layer = keras_nlp.TransformerEncoderBlock(
         num_attention_heads=num_attention_heads,
-        intermediate_size=intermediate_size,
-        intermediate_activation=activation,
-        dropout_rate=dropout_rate,
-        attention_dropout_rate=attention_dropout_rate,
+        inner_dim=intermediate_size,
+        inner_activation=activation,
+        output_dropout=dropout_rate,
+        attention_dropout=attention_dropout_rate,
         kernel_initializer=initializer,
         name='transformer')
     for _ in range(num_layers):

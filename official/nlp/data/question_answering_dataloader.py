@@ -15,11 +15,13 @@
 # ==============================================================================
 """Loads dataset for the question answering (e.g, SQuAD) task."""
 from typing import Mapping, Optional
+
 import dataclasses
 import tensorflow as tf
 
 from official.core import input_reader
 from official.modeling.hyperparams import config_definitions as cfg
+from official.nlp.data import data_loader
 from official.nlp.data import data_loader_factory
 
 
@@ -36,13 +38,15 @@ class QADataConfig(cfg.DataConfig):
   input_preprocessed_data_path: str = ''
   doc_stride: int = 128
   query_length: int = 64
+  # The path to the vocab file of word piece tokenizer or the
+  # model of the sentence piece tokenizer.
   vocab_file: str = ''
   tokenization: str = 'WordPiece'  # WordPiece or SentencePiece
   do_lower_case: bool = True
 
 
 @data_loader_factory.register_data_loader_cls(QADataConfig)
-class QuestionAnsweringDataLoader:
+class QuestionAnsweringDataLoader(data_loader.DataLoader):
   """A class to load dataset for sentence prediction (classification) task."""
 
   def __init__(self, params):

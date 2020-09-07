@@ -33,9 +33,14 @@ _UNK_TOKEN = "[UNK]"
 class InputExample(object):
   """A single training/test example for token classification."""
 
-  def __init__(self, sentence_id, words=None, label_ids=None):
+  def __init__(self,
+               sentence_id,
+               sub_sentence_id=0,
+               words=None,
+               label_ids=None):
     """Constructs an InputExample."""
     self.sentence_id = sentence_id
+    self.sub_sentence_id = sub_sentence_id
     self.words = words if words else []
     self.label_ids = label_ids if label_ids else []
 
@@ -146,7 +151,7 @@ def _tokenize_example(example, max_length, tokenizer, text_preprocessing=None):
   # Needs additional [CLS] and [SEP] tokens.
   max_length = max_length - 2
   new_examples = []
-  new_example = InputExample(sentence_id=example.sentence_id)
+  new_example = InputExample(sentence_id=example.sentence_id, sub_sentence_id=0)
   for i, word in enumerate(example.words):
     if any([x < 0 for x in example.label_ids]):
       raise ValueError("Unexpected negative label_id: %s" % example.label_ids)
@@ -160,7 +165,10 @@ def _tokenize_example(example, max_length, tokenizer, text_preprocessing=None):
     if len(subwords) + len(new_example.words) > max_length:
       # Start a new example.
       new_examples.append(new_example)
-      new_example = InputExample(sentence_id=example.sentence_id)
+      last_sub_sentence_id = new_example.sub_sentence_id
+      new_example = InputExample(
+          sentence_id=example.sentence_id,
+          sub_sentence_id=last_sub_sentence_id + 1)
 
     for j, subword in enumerate(subwords):
       # Use the real label for the first subword, and pad label for
@@ -203,6 +211,7 @@ def _convert_single_example(example, max_seq_length, tokenizer):
   features["segment_ids"] = create_int_feature(segment_ids)
   features["label_ids"] = create_int_feature(label_ids)
   features["sentence_id"] = create_int_feature([example.sentence_id])
+  features["sub_sentence_id"] = create_int_feature([example.sub_sentence_id])
 
   tf_example = tf.train.Example(features=tf.train.Features(feature=features))
   return tf_example
@@ -267,12 +276,12 @@ def write_example_to_file(examples,
       logging.info("Writing example %d of %d to %s", ex_index, len(examples),
                    output_file)
 
-    tokenized_examples = _tokenize_example(example, max_seq_length,
-                                           tokenizer, text_preprocessing)
+    tokenized_examples = _tokenize_example(example, max_seq_length, tokenizer,
+                                           text_preprocessing)
     num_tokenized_examples += len(tokenized_examples)
     for per_tokenized_example in tokenized_examples:
-      tf_example = _convert_single_example(
-          per_tokenized_example, max_seq_length, tokenizer)
+      tf_example = _convert_single_example(per_tokenized_example,
+                                           max_seq_length, tokenizer)
       writer.write(tf_example.SerializeToString())
 
   writer.close()
@@ -307,17 +316,16 @@ def token_classification_meta_data(train_data_size,
   return meta_data
 
 
-def generate_tf_record_from_data_file(processor,
-                                      data_dir,
-                                      tokenizer,
-                                      max_seq_length,
-                                      train_data_output_path,
+def generate_tf_record_from_data_file(processor, data_dir, tokenizer,
+                                      max_seq_length, train_data_output_path,
                                       eval_data_output_path,
                                       test_data_output_path,
                                       text_preprocessing):
   """Generates tfrecord files from the raw data."""
-  common_kwargs = dict(tokenizer=tokenizer, max_seq_length=max_seq_length,
-                       text_preprocessing=text_preprocessing)
+  common_kwargs = dict(
+      tokenizer=tokenizer,
+      max_seq_length=max_seq_length,
+      text_preprocessing=text_preprocessing)
   train_examples = processor.get_train_examples(data_dir)
   train_data_size = write_example_to_file(
       train_examples, output_file=train_data_output_path, **common_kwargs)

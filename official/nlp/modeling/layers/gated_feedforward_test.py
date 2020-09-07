@@ -14,10 +14,6 @@
 # ==============================================================================
 """Tests for Keras-based gated feedforward layer."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from absl.testing import parameterized
 import numpy as np
 import tensorflow as tf
@@ -122,6 +118,7 @@ class GatedFeedforwardTest(keras_parameterized.TestCase):
 
     # If the serialization was successful, the new config should match the old.
     self.assertAllEqual(test_layer.get_config(), new_layer.get_config())
+
 
 if __name__ == "__main__":
   tf.test.main()

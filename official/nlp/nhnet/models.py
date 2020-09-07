@@ -404,7 +404,7 @@ def get_bert2bert_layers(params: configs.BERT2BERTConfig):
   target_ids = tf.keras.layers.Input(
       shape=(None,), name="target_ids", dtype=tf.int32)
   bert_config = utils.get_bert_config_from_params(params)
-  bert_model_layer = networks.TransformerEncoder(
+  bert_model_layer = networks.BertEncoder(
       vocab_size=bert_config.vocab_size,
       hidden_size=bert_config.hidden_size,
       num_layers=bert_config.num_hidden_layers,
@@ -413,7 +413,6 @@ def get_bert2bert_layers(params: configs.BERT2BERTConfig):
       activation=tf_utils.get_activation(bert_config.hidden_act),
       dropout_rate=bert_config.hidden_dropout_prob,
       attention_dropout_rate=bert_config.attention_probs_dropout_prob,
-      sequence_length=None,
       max_sequence_length=bert_config.max_position_embeddings,
       type_vocab_size=bert_config.type_vocab_size,
       initializer=tf.keras.initializers.TruncatedNormal(
@@ -455,7 +454,7 @@ def get_nhnet_layers(params: configs.NHNetConfig):
   segment_ids = tf.keras.layers.Input(
       shape=(None,), name="segment_ids", dtype=tf.int32)
   bert_config = utils.get_bert_config_from_params(params)
-  bert_model_layer = networks.TransformerEncoder(
+  bert_model_layer = networks.BertEncoder(
       vocab_size=bert_config.vocab_size,
       hidden_size=bert_config.hidden_size,
       num_layers=bert_config.num_hidden_layers,
@@ -584,7 +583,6 @@ def create_model(model_type: Text,
   elif model_type == "nhnet":
     return create_nhnet_model(params, init_checkpoint=init_checkpoint)
   elif "transformer" in model_type:
-    return create_transformer_model(
-        params, init_checkpoint=init_checkpoint)
+    return create_transformer_model(params, init_checkpoint=init_checkpoint)
   else:
     raise KeyError("The model type is not defined: %s" % model_type)

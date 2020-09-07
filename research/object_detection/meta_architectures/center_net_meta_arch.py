@@ -118,6 +118,12 @@ class CenterNetFeatureExtractor(tf.keras.Model):
     """Ther number of feature outputs returned by the feature extractor."""
     pass
 
+  @property
+  @abc.abstractmethod
+  def supported_sub_model_types(self):
+    """Valid sub model types supported by the get_sub_model function."""
+    pass
+
   @abc.abstractmethod
   def get_sub_model(self, sub_model_type):
     """Returns the underlying keras model for the given sub_model_type.
@@ -305,6 +311,7 @@ def prediction_tensors_to_boxes(detection_scores, y_indices, x_indices,
 
   height_width = tf.gather(height_width_flat, peak_spatial_indices,
                            batch_dims=1)
+  height_width = tf.maximum(height_width, 0)
   offsets = tf.gather(offsets_flat, peak_spatial_indices, batch_dims=1)
 
   heights, widths = tf.unstack(height_width, axis=2)
@@ -1164,6 +1171,33 @@ def gather_surface_coords_for_parts(surface_coords_cropped,
   return tf.reshape(vu_coords_flattened, [max_detections, height, width, 2])
 
 
+def predicted_embeddings_at_object_centers(embedding_predictions,
+                                           y_indices, x_indices):
+  """Returns the predicted embeddings at specified object centers.
+
+  Args:
+    embedding_predictions: A float tensor of shape [batch_size, height, width,
+      reid_embed_size] holding predicted embeddings.
+    y_indices: A [batch, num_instances] int tensor holding y indices for object
+      centers. These indices correspond to locations in the output feature map.
+    x_indices: A [batch, num_instances] int tensor holding x indices for object
+      centers. These indices correspond to locations in the output feature map.
+
+  Returns:
+    A float tensor of shape [batch_size, num_objects, reid_embed_size] where
+    predicted embeddings are gathered at the provided locations.
+  """
+  batch_size, _, width, _ = _get_shape(embedding_predictions, 4)
+  flattened_indices = flattened_indices_from_row_col_indices(
+      y_indices, x_indices, width)
+  _, num_instances = _get_shape(flattened_indices, 2)
+  embeddings_flat = _flatten_spatial_dimensions(embedding_predictions)
+  embeddings = tf.gather(embeddings_flat, flattened_indices, batch_dims=1)
+  embeddings = tf.reshape(embeddings, [batch_size, num_instances, -1])
+
+  return embeddings
+
+
 class ObjectDetectionParams(
     collections.namedtuple('ObjectDetectionParams', [
         'localization_loss', 'scale_loss_weight', 'offset_loss_weight',
@@ -1464,6 +1498,42 @@ class DensePoseParams(
                               task_loss_weight, upsample_to_input_res,
                               upsample_method, heatmap_bias_init)
 
+
+class TrackParams(
+    collections.namedtuple('TrackParams', [
+        'num_track_ids', 'reid_embed_size', 'num_fc_layers',
+        'classification_loss', 'task_loss_weight'
+    ])):
+  """Namedtuple to store tracking prediction related parameters."""
+
+  __slots__ = ()
+
+  def __new__(cls,
+              num_track_ids,
+              reid_embed_size,
+              num_fc_layers,
+              classification_loss,
+              task_loss_weight=1.0):
+    """Constructor with default values for TrackParams.
+
+    Args:
+      num_track_ids: int. The maximum track ID in the dataset. Used for ReID
+        embedding classification task.
+      reid_embed_size: int. The embedding size for ReID task.
+      num_fc_layers: int. The number of (fully-connected, batch-norm, relu)
+        layers for track ID classification head.
+      classification_loss: an object_detection.core.losses.Loss object to
+        compute the loss for the ReID embedding in CenterNet.
+      task_loss_weight: float, the loss weight for the tracking task.
+
+    Returns:
+      An initialized TrackParams namedtuple.
+    """
+    return super(TrackParams,
+                 cls).__new__(cls, num_track_ids, reid_embed_size,
+                              num_fc_layers, classification_loss,
+                              task_loss_weight)
+
 # The following constants are used to generate the keys of the
 # (prediction, loss, target assigner,...) dictionaries used in CenterNetMetaArch
 # class.
@@ -1480,6 +1550,8 @@ DENSEPOSE_TASK = 'densepose_task'
 DENSEPOSE_HEATMAP = 'densepose/heatmap'
 DENSEPOSE_REGRESSION = 'densepose/regression'
 LOSS_KEY_PREFIX = 'Loss'
+TRACK_TASK = 'track_task'
+TRACK_REID = 'track/reid'
 
 
 def get_keypoint_name(task_name, head_name):
@@ -1523,7 +1595,8 @@ class CenterNetMetaArch(model.DetectionModel):
                object_detection_params=None,
                keypoint_params_dict=None,
                mask_params=None,
-               densepose_params=None):
+               densepose_params=None,
+               track_params=None):
     """Initializes a CenterNet model.
 
     Args:
@@ -1555,6 +1628,9 @@ class CenterNetMetaArch(model.DetectionModel):
         hyper-parameters for DensePose prediction. Please see the class
         definition for more details. Note that if this is provided, it is
         expected that `mask_params` is also provided.
+      track_params: A TrackParams namedtuple. This object
+        holds the hyper-parameters for tracking. Please see the class
+        definition for more details.
     """
     assert object_detection_params or keypoint_params_dict
     # Shorten the name for convenience and better formatting.
@@ -1574,6 +1650,7 @@ class CenterNetMetaArch(model.DetectionModel):
       raise ValueError('To run DensePose prediction, `mask_params` must also '
                        'be supplied.')
     self._densepose_params = densepose_params
+    self._track_params = track_params
 
     # Construct the prediction head nets.
     self._prediction_head_dict = self._construct_prediction_heads(
@@ -1613,7 +1690,8 @@ class CenterNetMetaArch(model.DetectionModel):
 
     Returns:
       A dictionary of keras modules generated by calling make_prediction_net
-      function.
+      function. It will also create and set a private member of the class when
+      learning the tracking task.
     """
     prediction_heads = {}
     prediction_heads[OBJECT_CENTER] = [
@@ -1666,6 +1744,26 @@ class CenterNetMetaArch(model.DetectionModel):
           make_prediction_net(2 * self._densepose_params.num_parts)
           for _ in range(num_feature_outputs)
       ]
+    if self._track_params is not None:
+      prediction_heads[TRACK_REID] = [
+          make_prediction_net(self._track_params.reid_embed_size)
+          for _ in range(num_feature_outputs)]
+
+      # Creates a classification network to train object embeddings by learning
+      # a projection from embedding space to object track ID space.
+      self.track_reid_classification_net = tf.keras.Sequential()
+      for _ in range(self._track_params.num_fc_layers - 1):
+        self.track_reid_classification_net.add(
+            tf.keras.layers.Dense(self._track_params.reid_embed_size,
+                                  input_shape=(
+                                      self._track_params.reid_embed_size,)))
+        self.track_reid_classification_net.add(
+            tf.keras.layers.BatchNormalization())
+        self.track_reid_classification_net.add(tf.keras.layers.ReLU())
+      self.track_reid_classification_net.add(
+          tf.keras.layers.Dense(self._track_params.num_track_ids,
+                                input_shape=(
+                                    self._track_params.reid_embed_size,)))
     return prediction_heads
 
   def _initialize_target_assigners(self, stride, min_box_overlap_iou):
@@ -1704,6 +1802,10 @@ class CenterNetMetaArch(model.DetectionModel):
       dp_stride = 1 if self._densepose_params.upsample_to_input_res else stride
       target_assigners[DENSEPOSE_TASK] = (
           cn_assigner.CenterNetDensePoseTargetAssigner(dp_stride))
+    if self._track_params is not None:
+      target_assigners[TRACK_TASK] = (
+          cn_assigner.CenterNetTrackTargetAssigner(
+              stride, self._track_params.num_track_ids))
 
     return target_assigners
 
@@ -2222,6 +2324,76 @@ class CenterNetMetaArch(model.DetectionModel):
         num_predictions * num_valid_points)
     return part_prediction_loss, surface_coord_loss
 
+  def _compute_track_losses(self, input_height, input_width, prediction_dict):
+    """Computes all the losses associated with tracking.
+
+    Args:
+      input_height: An integer scalar tensor representing input image height.
+      input_width: An integer scalar tensor representing input image width.
+      prediction_dict: The dictionary returned from the predict() method.
+
+    Returns:
+      A dictionary with tracking losses.
+    """
+    object_reid_predictions = prediction_dict[TRACK_REID]
+    embedding_loss = self._compute_track_embedding_loss(
+        input_height=input_height,
+        input_width=input_width,
+        object_reid_predictions=object_reid_predictions)
+    losses = {
+        TRACK_REID: embedding_loss
+    }
+    return losses
+
+  def _compute_track_embedding_loss(self, input_height, input_width,
+                                    object_reid_predictions):
+    """Computes the object ReID loss.
+
+    The embedding is trained as a classification task where the target is the
+    ID of each track among all tracks in the whole dataset.
+
+    Args:
+      input_height: An integer scalar tensor representing input image height.
+      input_width: An integer scalar tensor representing input image width.
+      object_reid_predictions: A list of float tensors of shape [batch_size,
+        out_height, out_width, reid_embed_size] representing the object
+        embedding feature maps.
+
+    Returns:
+      A float scalar tensor representing the object ReID loss per instance.
+    """
+    gt_track_ids_list = self.groundtruth_lists(fields.BoxListFields.track_ids)
+    gt_boxes_list = self.groundtruth_lists(fields.BoxListFields.boxes)
+    gt_weights_list = self.groundtruth_lists(fields.BoxListFields.weights)
+    num_boxes = _to_float32(get_num_instances_from_weights(gt_weights_list))
+
+    # Convert the groundtruth to targets.
+    assigner = self._target_assigner_dict[TRACK_TASK]
+    batch_indices, batch_weights, track_targets = assigner.assign_track_targets(
+        height=input_height,
+        width=input_width,
+        gt_track_ids_list=gt_track_ids_list,
+        gt_boxes_list=gt_boxes_list,
+        gt_weights_list=gt_weights_list)
+    batch_weights = tf.expand_dims(batch_weights, -1)
+
+    loss = 0.0
+    object_reid_loss = self._track_params.classification_loss
+    # Loop through each feature output head.
+    for pred in object_reid_predictions:
+      embedding_pred = cn_assigner.get_batch_predictions_from_indices(
+          pred, batch_indices)
+
+      reid_classification = self.track_reid_classification_net(embedding_pred)
+
+      loss += object_reid_loss(
+          reid_classification, track_targets, weights=batch_weights)
+
+    loss_per_instance = tf.reduce_sum(loss) / (
+        float(len(object_reid_predictions)) * num_boxes)
+
+    return loss_per_instance
+
   def preprocess(self, inputs):
     outputs = shape_utils.resize_images_and_return_shapes(
         inputs, self._image_resizer_fn)
@@ -2316,7 +2488,8 @@ class CenterNetMetaArch(model.DetectionModel):
         'Loss/$TASK_NAME/keypoint/regression', (optional)
         'Loss/segmentation/heatmap', (optional)
         'Loss/densepose/heatmap', (optional)
-        'Loss/densepose/regression]' (optional)
+        'Loss/densepose/regression', (optional)
+        'Loss/track/reid'] (optional)
         scalar tensors corresponding to the losses for different tasks. Note the
         $TASK_NAME is provided by the KeypointEstimation namedtuple used to
         differentiate between different keypoint tasks.
@@ -2384,6 +2557,16 @@ class CenterNetMetaArch(model.DetectionModel):
             densepose_losses[key] * self._densepose_params.task_loss_weight)
       losses.update(densepose_losses)
 
+    if self._track_params is not None:
+      track_losses = self._compute_track_losses(
+          input_height=input_height,
+          input_width=input_width,
+          prediction_dict=prediction_dict)
+      for key in track_losses:
+        track_losses[key] = (
+            track_losses[key] * self._track_params.task_loss_weight)
+      losses.update(track_losses)
+
     # Prepend the LOSS_KEY_PREFIX to the keys in the dictionary such that the
     # losses will be grouped together in Tensorboard.
     return dict([('%s/%s' % (LOSS_KEY_PREFIX, key), val)
@@ -2407,6 +2590,9 @@ class CenterNetMetaArch(model.DetectionModel):
       detections: a dictionary containing the following fields
         detection_boxes - A tensor of shape [batch, max_detections, 4]
           holding the predicted boxes.
+        detection_boxes_strided: A tensor of shape [batch_size, num_detections,
+          4] holding the predicted boxes in absolute coordinates of the
+          feature extractor's final layer output.
         detection_scores: A tensor of shape [batch, max_detections] holding
           the predicted score for each box.
         detection_classes: An integer tensor of shape [batch, max_detections]
@@ -2426,6 +2612,8 @@ class CenterNetMetaArch(model.DetectionModel):
         detection_surface_coords: (Optional) A float32 tensor of shape [batch,
           max_detection, mask_height, mask_width, 2] with DensePose surface
           coordinates, in (v, u) format.
+        detection_embeddings: (Optional) A float tensor of shape [batch,
+          max_detections, reid_embed_size] containing object embeddings.
     """
     object_center_prob = tf.nn.sigmoid(prediction_dict[OBJECT_CENTER][-1])
     # Get x, y and channel indices corresponding to the top indices in the class
@@ -2448,6 +2636,7 @@ class CenterNetMetaArch(model.DetectionModel):
         fields.DetectionResultFields.detection_scores: scores,
         fields.DetectionResultFields.detection_classes: classes,
         fields.DetectionResultFields.num_detections: num_detections,
+        'detection_boxes_strided': boxes_strided
     }
 
     if self._kp_params_dict:
@@ -2487,7 +2676,38 @@ class CenterNetMetaArch(model.DetectionModel):
             fields.DetectionResultFields.detection_surface_coords] = (
                 surface_coords)
 
+    if self._track_params:
+      embeddings = self._postprocess_embeddings(prediction_dict,
+                                                y_indices, x_indices)
+      postprocess_dict.update({
+          fields.DetectionResultFields.detection_embeddings: embeddings
+      })
+
     return postprocess_dict
+
+  def _postprocess_embeddings(self, prediction_dict, y_indices, x_indices):
+    """Performs postprocessing on embedding predictions.
+
+    Args:
+      prediction_dict: a dictionary holding predicted tensors, returned from the
+        predict() method. This dictionary should contain embedding prediction
+        feature maps for tracking task.
+      y_indices: A [batch_size, max_detections] int tensor with y indices for
+        all object centers.
+      x_indices: A [batch_size, max_detections] int tensor with x indices for
+        all object centers.
+
+    Returns:
+      embeddings: A [batch_size, max_detection, reid_embed_size] float32
+        tensor with L2 normalized embeddings extracted from detection box
+        centers.
+    """
+    embedding_predictions = prediction_dict[TRACK_REID][-1]
+    embeddings = predicted_embeddings_at_object_centers(
+        embedding_predictions, y_indices, x_indices)
+    embeddings, _ = tf.linalg.normalize(embeddings, axis=-1)
+
+    return embeddings
 
   def _postprocess_keypoints(self, prediction_dict, classes, y_indices,
                              x_indices, boxes, num_detections):
@@ -2761,22 +2981,47 @@ class CenterNetMetaArch(model.DetectionModel):
       fine_tune_checkpoint_type: whether to restore from a full detection
         checkpoint (with compatible variable names) or to restore from a
         classification checkpoint for initialization prior to training.
-        Valid values: `detection`, `classification`. Default 'detection'.
-        'detection': used when loading in the Hourglass model pre-trained on
-          other detection task.
-        'classification': used when loading in the ResNet model pre-trained on
-          image classification task. Note that only the image feature encoding
-          part is loaded but not those upsampling layers.
+        Valid values: `detection`, `classification`, `fine_tune`.
+        Default 'detection'.
+        'detection': used when loading models pre-trained on other detection
+          tasks. With this checkpoint type the weights of the feature extractor
+          are expected under the attribute 'feature_extractor'.
+        'classification': used when loading models pre-trained on an image
+          classification task. Note that only the encoder section of the network
+          is loaded and not the upsampling layers. With this checkpoint type,
+          the weights of only the encoder section are expected under the
+          attribute 'feature_extractor'.
         'fine_tune': used when loading the entire CenterNet feature extractor
           pre-trained on other tasks. The checkpoints saved during CenterNet
-          model training can be directly loaded using this mode.
+          model training can be directly loaded using this type. With this
+          checkpoint type, the weights of the feature extractor are expected
+          under the attribute 'model._feature_extractor'.
+        For more details, see the tensorflow section on Loading mechanics.
+        https://www.tensorflow.org/guide/checkpoint#loading_mechanics
 
     Returns:
       A dict mapping keys to Trackable objects (tf.Module or Checkpoint).
     """
 
-    sub_model = self._feature_extractor.get_sub_model(fine_tune_checkpoint_type)
-    return {'feature_extractor': sub_model}
+    supported_types = self._feature_extractor.supported_sub_model_types
+    supported_types += ['fine_tune']
+
+    if fine_tune_checkpoint_type not in supported_types:
+      message = ('Checkpoint type "{}" not supported for {}. '
+                 'Supported types are {}')
+      raise ValueError(
+          message.format(fine_tune_checkpoint_type,
+                         self._feature_extractor.__class__.__name__,
+                         supported_types))
+
+    elif fine_tune_checkpoint_type == 'fine_tune':
+      feature_extractor_model = tf.train.Checkpoint(
+          _feature_extractor=self._feature_extractor)
+      return {'model': feature_extractor_model}
+
+    else:
+      return {'feature_extractor': self._feature_extractor.get_sub_model(
+          fine_tune_checkpoint_type)}
 
   def updates(self):
     raise RuntimeError('This model is intended to be used with model_lib_v2 '

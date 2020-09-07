@@ -14,10 +14,6 @@
 # ==============================================================================
 """Keras-based transformer scaffold layer."""
 # pylint: disable=g-classes-have-attributes
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
 
 import gin
 import tensorflow as tf
@@ -46,28 +42,25 @@ class TransformerScaffold(tf.keras.layers.Layer):
     attention_cfg: The config with which to instantiate `attention_cls`. Ignored
       if attention_cls is a layer instance or None. If `attention_cls` is a
       class, but `attention_cfg` is None, following kwargs will be used to
-      instantiate the attention instance:
-      {
+      instantiate the attention instance: {
         "num_heads": num_attention_heads,
-        "key_size": int(hidden_size // num_attention_heads),
+        "key_dim": int(hidden_size // num_attention_heads),
         "dropout": attention_dropout_rate,
-        "name": "self_attention"
-      }, where `hidden_size` is the input tensor's last dimension.
+        "name": "self_attention" }, where `hidden_size` is the input tensor's
+          last dimension.
     feedforward_cls: A class to instantiate feedforward layer, or a layer
-      instance. If None, will use the standard feedforward layer as described
-      in "Attention Is All You Need" paper. If not None, the instantiated
-      feedforward layer is expected to take the output of attention as input
-      and its output is this transformer layer's output.
+      instance. If None, will use the standard feedforward layer as described in
+      "Attention Is All You Need" paper. If not None, the instantiated
+      feedforward layer is expected to take the output of attention as input and
+      its output is this transformer layer's output.
     feedforward_cfg: The config with which to instantiate `feedforward_cls`.
-      Ignored if feedforward_cls is a layer instance or is None.
-      If `feedforward_cls` is a class, but `feedforward_cfg` is None, following
-      kwargs will be used to instantiate the feedforward instance:
-      {
+      Ignored if feedforward_cls is a layer instance or is None. If
+      `feedforward_cls` is a class, but `feedforward_cfg` is None, following
+      kwargs will be used to instantiate the feedforward instance: {
         "intermediate_size": intermediate_size,
         "intermediate_activation": intermediate_activation,
         "dropout": dropout_rate,
-        "name": "feedforward"
-      }.
+        "name": "feedforward" }.
     dropout_rate: Dropout probability for the post-attention and output dropout.
     attention_dropout_rate: Dropout probability for within the attention layer.
     kernel_initializer: Initializer for dense layer kernels.
@@ -118,7 +111,7 @@ class TransformerScaffold(tf.keras.layers.Layer):
   def build(self, input_shape):
     input_tensor = input_shape[0] if len(input_shape) == 2 else input_shape
     input_tensor_shape = tf.TensorShape(input_tensor)
-    if len(input_tensor_shape) != 3:
+    if len(input_tensor_shape.as_list()) != 3:
       raise ValueError(
           "TransformerScaffold expects a three-dimensional input of "
           "shape [batch, sequence, width].")
@@ -160,7 +153,7 @@ class TransformerScaffold(tf.keras.layers.Layer):
 
     default_attention_cfg = {
         "num_heads": self._num_heads,
-        "key_size": self._attention_head_size,
+        "key_dim": self._attention_head_size,
         "dropout": self._attention_dropout_rate,
         "name": "self_attention"
     }
@@ -190,7 +183,9 @@ class TransformerScaffold(tf.keras.layers.Layer):
     # It is probably safe in mixed_float16, but we haven't validated this yet.
     self._attention_layer_norm = (
         tf.keras.layers.LayerNormalization(
-            name="self_attention_layer_norm", axis=-1, epsilon=1e-12,
+            name="self_attention_layer_norm",
+            axis=-1,
+            epsilon=1e-12,
             dtype=tf.float32))
 
     if self._feedforward_block is None:

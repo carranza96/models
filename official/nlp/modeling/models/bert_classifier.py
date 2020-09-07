@@ -44,8 +44,8 @@ class BertClassifier(tf.keras.Model):
     initializer: The initializer (if any) to use in the classification networks.
       Defaults to a Glorot uniform initializer.
     dropout_rate: The dropout probability of the cls head.
-    use_encoder_pooler: Whether to use the pooler layer pre-defined inside
-      the encoder.
+    use_encoder_pooler: Whether to use the pooler layer pre-defined inside the
+      encoder.
   """
 
   def __init__(self,
@@ -97,7 +97,11 @@ class BertClassifier(tf.keras.Model):
 
   @property
   def checkpoint_items(self):
-    return dict(encoder=self._network)
+    items = dict(encoder=self._network)
+    if hasattr(self.classifier, 'checkpoint_items'):
+      for key, item in self.classifier.checkpoint_items.items():
+        items['.'.join([self.classifier.name, key])] = item
+    return items
 
   def get_config(self):
     return self._config

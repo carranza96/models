@@ -14,15 +14,9 @@
 # ==============================================================================
 """Keras-based rezero-transformer block layer (Transformer with ReZero)."""
 # pylint: disable=g-classes-have-attributes
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
 
 import gin
 import tensorflow as tf
-
-from official.nlp.modeling.layers import attention
 
 
 @tf.keras.utils.register_keras_serializable(package="Text")
@@ -88,7 +82,7 @@ class ReZeroTransformer(tf.keras.layers.Layer):
   def build(self, input_shape):
     input_tensor = input_shape[0] if len(input_shape) == 2 else input_shape
     input_tensor_shape = tf.TensorShape(input_tensor)
-    if len(input_tensor_shape) != 3:
+    if len(input_tensor_shape.as_list()) != 3:
       raise ValueError("TransformerLayer expects a three-dimensional input of "
                        "shape [batch, sequence, width].")
     batch_size, sequence_length, hidden_size = input_tensor_shape
@@ -116,9 +110,9 @@ class ReZeroTransformer(tf.keras.layers.Layer):
         activity_regularizer=self._activity_regularizer,
         kernel_constraint=self._kernel_constraint,
         bias_constraint=self._bias_constraint)
-    self._attention_layer = attention.MultiHeadAttention(
+    self._attention_layer = tf.keras.layers.MultiHeadAttention(
         num_heads=self._num_heads,
-        key_size=self._attention_head_size,
+        key_dim=self._attention_head_size,
         dropout=self._attention_dropout_rate,
         name="self_attention",
         **common_kwargs)
@@ -161,7 +155,8 @@ class ReZeroTransformer(tf.keras.layers.Layer):
     self._rezero_a = self.add_weight(
         name="rezero_alpha",
         initializer=tf.keras.initializers.Zeros(),
-        trainable=True, dtype=tf.float32)
+        trainable=True,
+        dtype=tf.float32)
 
     super(ReZeroTransformer, self).build(input_shape)
 

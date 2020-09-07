@@ -75,6 +75,13 @@ def _float_metric_value(metric):
   return metric.result().numpy().astype(float)
 
 
+def clip_by_global_norm_callback(grads_and_vars):
+  """Performs gradient clipping."""
+  grads, variables = zip(*grads_and_vars)
+  (clipped_grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  return zip(clipped_grads, variables)
+
+
 def steps_to_run(current_step, steps_per_epoch, steps_per_loop):
   """Calculates steps to run on device."""
   if steps_per_loop <= 0:
@@ -126,7 +133,8 @@ def run_customized_training_loop(
     explicit_allreduce=False,
     pre_allreduce_callbacks=None,
     post_allreduce_callbacks=None,
-    train_summary_interval=0):
+    train_summary_interval=0,
+    allreduce_bytes_per_pack=0):
   """Run BERT pretrain model training using low-level API.
 
   Arguments:
@@ -164,8 +172,8 @@ def run_customized_training_loop(
       custom_callbacks: A list of Keras Callbacks objects to run during
         training. More specifically, `on_train_begin(), on_train_end(),
         on_batch_begin()`, `on_batch_end()`, `on_epoch_begin()`,
-        `on_epoch_end()` methods are invoked during training.
-        Note that some metrics may be missing from `logs`.
+        `on_epoch_end()` methods are invoked during training. Note that some
+        metrics may be missing from `logs`.
       run_eagerly: Whether to run model training in pure eager execution. This
         should be disable for TPUStrategy.
       sub_model_export_name: If not None, will export `sub_model` returned by
@@ -194,6 +202,11 @@ def run_customized_training_loop(
         when explicit_allreduce=True.
       train_summary_interval: Step interval for training summaries. If the value
         is a negative number, then training summaries are not enabled.
+      allreduce_bytes_per_pack: A non-negative integer. Breaks collective
+        operations into packs of certain size. If it's zero, all gradients are
+        in one pack. Breaking gradient into packs could enable overlap between
+        allreduce and backprop computation. This flag only takes effect when
+        explicit_allreduce is set to True.'
 
   Returns:
       Trained model.
@@ -325,7 +338,8 @@ def run_customized_training_loop(
         grad_utils.minimize_using_explicit_allreduce(tape, optimizer, loss,
                                                      training_vars,
                                                      pre_allreduce_callbacks,
-                                                     post_allreduce_callbacks)
+                                                     post_allreduce_callbacks,
+                                                     allreduce_bytes_per_pack)
       else:
         if isinstance(optimizer,
                       tf.keras.mixed_precision.experimental.LossScaleOptimizer):
@@ -458,8 +472,7 @@ def run_customized_training_loop(
     callback_list.on_train_begin()
     while current_step < total_training_steps and not model.stop_training:
       if current_step % steps_per_epoch == 0:
-        callback_list.on_epoch_begin(
-            int(current_step / steps_per_epoch) + 1)
+        callback_list.on_epoch_begin(int(current_step / steps_per_epoch) + 1)
 
       # Training loss/metric are taking average over steps inside micro
       # training loop. We reset the their values before each round.
@@ -524,13 +537,14 @@ def run_customized_training_loop(
           _save_checkpoint(strategy, checkpoint, model_dir,
                            checkpoint_name.format(step=current_step))
           if eval_input_fn:
-            logging.info('Running evaluation after step: %s.', current_step)
-            logs = _run_evaluation(current_step,
-                                   _get_input_iterator(eval_input_fn, strategy))
             # Re-initialize evaluation metric.
             eval_loss_metric.reset_states()
             for metric in eval_metrics + model.metrics:
               metric.reset_states()
+
+            logging.info('Running evaluation after step: %s.', current_step)
+            logs = _run_evaluation(current_step,
+                                   _get_input_iterator(eval_input_fn, strategy))
         # We add train_loss here rather than call on_batch_end twice to make
         # sure that no duplicated values are generated.
         logs['loss'] = train_loss
@@ -548,6 +562,11 @@ def run_customized_training_loop(
     _save_checkpoint(strategy, checkpoint, model_dir,
                      checkpoint_name.format(step=current_step))
     if eval_input_fn:
+      # Re-initialize evaluation metric.
+      eval_loss_metric.reset_states()
+      for metric in eval_metrics + model.metrics:
+        metric.reset_states()
+
       logging.info('Running final evaluation after training is complete.')
       logs = _run_evaluation(current_step,
                              _get_input_iterator(eval_input_fn, strategy))

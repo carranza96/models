@@ -39,7 +39,7 @@ class InputExample(object):
                text_b=None,
                label=None,
                weight=None,
-               int_iden=None):
+               example_id=None):
     """Constructs a InputExample.
 
     Args:
@@ -53,15 +53,15 @@ class InputExample(object):
         examples, but not for test examples.
       weight: (Optional) float. The weight of the example to be used during
         training.
-      int_iden: (Optional) int. The int identification number of example in the
-        corpus.
+      example_id: (Optional) int. The int identification number of example in
+        the corpus.
     """
     self.guid = guid
     self.text_a = text_a
     self.text_b = text_b
     self.label = label
     self.weight = weight
-    self.int_iden = int_iden
+    self.example_id = example_id
 
 
 class InputFeatures(object):
@@ -74,14 +74,14 @@ class InputFeatures(object):
                label_id,
                is_real_example=True,
                weight=None,
-               int_iden=None):
+               example_id=None):
     self.input_ids = input_ids
     self.input_mask = input_mask
     self.segment_ids = segment_ids
     self.label_id = label_id
     self.is_real_example = is_real_example
     self.weight = weight
-    self.int_iden = int_iden
+    self.example_id = example_id
 
 
 class DataProcessor(object):
@@ -438,12 +438,18 @@ class QqpProcessor(DataProcessor):
       if i == 0:
         continue
       guid = "%s-%s" % (set_type, line[0])
-      try:
-        text_a = line[3]
-        text_b = line[4]
-        label = line[5]
-      except IndexError:
-        continue
+      if set_type == "test":
+        text_a = line[1]
+        text_b = line[2]
+        label = "0"
+      else:
+        # There appear to be some garbage lines in the train dataset.
+        try:
+          text_a = line[3]
+          text_b = line[4]
+          label = line[5]
+        except IndexError:
+          continue
       examples.append(
           InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
     return examples
@@ -1044,7 +1050,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     logging.info("segment_ids: %s", " ".join([str(x) for x in segment_ids]))
     logging.info("label: %s (id = %s)", example.label, str(label_id))
     logging.info("weight: %s", example.weight)
-    logging.info("int_iden: %s", str(example.int_iden))
+    logging.info("example_id: %s", example.example_id)
 
   feature = InputFeatures(
       input_ids=input_ids,
@@ -1053,7 +1059,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
       label_id=label_id,
       is_real_example=True,
       weight=example.weight,
-      int_iden=example.int_iden)
+      example_id=example.example_id)
 
   return feature
 
@@ -1096,8 +1102,10 @@ def file_based_convert_examples_to_features(examples,
         [int(feature.is_real_example)])
     if feature.weight is not None:
       features["weight"] = create_float_feature([feature.weight])
-    if feature.int_iden is not None:
-      features["int_iden"] = create_int_feature([feature.int_iden])
+    if feature.example_id is not None:
+      features["example_id"] = create_int_feature([feature.example_id])
+    else:
+      features["example_id"] = create_int_feature([ex_index])
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
     writer.write(tf_example.SerializeToString())

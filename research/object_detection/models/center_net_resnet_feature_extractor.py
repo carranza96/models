@@ -46,10 +46,12 @@ class CenterNetResnetFeatureExtractor(CenterNetFeatureExtractor):
         channel_means=channel_means, channel_stds=channel_stds,
         bgr_ordering=bgr_ordering)
     if resnet_type == 'resnet_v2_101':
-      self._base_model = tf.keras.applications.ResNet101V2(weights=None)
+      self._base_model = tf.keras.applications.ResNet101V2(weights=None,
+                                                           include_top=False)
       output_layer = 'conv5_block3_out'
     elif resnet_type == 'resnet_v2_50':
-      self._base_model = tf.keras.applications.ResNet50V2(weights=None)
+      self._base_model = tf.keras.applications.ResNet50V2(weights=None,
+                                                          include_top=False)
       output_layer = 'conv5_block3_out'
     else:
       raise ValueError('Unknown Resnet Model {}'.format(resnet_type))
@@ -123,14 +125,15 @@ class CenterNetResnetFeatureExtractor(CenterNetFeatureExtractor):
   def out_stride(self):
     return 4
 
+  @property
+  def supported_sub_model_types(self):
+    return ['classification']
+
   def get_sub_model(self, sub_model_type):
     if sub_model_type == 'classification':
       return self._base_model
     else:
-      supported_types = ['classification']
-      raise ValueError(
-          ('Sub model {} is not defined for ResNet.'.format(sub_model_type) +
-           'Supported types are {}.'.format(supported_types)))
+      ValueError('Sub model type "{}" not supported.'.format(sub_model_type))
 
 
 def resnet_v2_101(channel_means, channel_stds, bgr_ordering):

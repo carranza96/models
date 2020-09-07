@@ -15,12 +15,17 @@
 # ==============================================================================
 """A common dataset reader."""
 
+import random
 from typing import Any, Callable, List, Optional
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from official.modeling.hyperparams import config_definitions as cfg
+
+
+def _get_random_integer():
+  return random.randint(0, (1 << 31) - 1)
 
 
 class InputReader:
@@ -95,6 +100,7 @@ class InputReader:
     self._cache = params.cache
     self._cycle_length = params.cycle_length
     self._block_length = params.block_length
+    self._deterministic = params.deterministic
     self._sharding = params.sharding
     self._examples_consume = params.examples_consume
     self._tfds_split = params.tfds_split
@@ -107,6 +113,12 @@ class InputReader:
     self._parser_fn = parser_fn
     self._transform_and_batch_fn = transform_and_batch_fn
     self._postprocess_fn = postprocess_fn
+    self._seed = _get_random_integer()
+
+    self._enable_tf_data_service = (
+        params.enable_tf_data_service and params.tf_data_service_address)
+    self._tf_data_service_address = params.tf_data_service_address
+    self._tf_data_service_job_name = params.tf_data_service_job_name
 
   def _read_sharded_files(
       self,
@@ -117,9 +129,22 @@ class InputReader:
       dataset = tf.data.Dataset.from_tensor_slices(self._shards)
     else:
       dataset = tf.data.Dataset.list_files(
-          self._input_patterns, shuffle=self._is_training)
+          self._input_patterns,
+          seed=self._seed,
+          shuffle=self._is_training)
+
+    # Shuffle and repeat at file level.
+    if self._shards and self._is_training:
+      dataset = dataset.shuffle(
+          len(self._shards),
+          seed=self._seed,
+          reshuffle_each_iteration=True)
+
+    # Do not enable sharding if tf.data service is enabled, as sharding will be
+    # handled inside tf.data service.
     if self._sharding and input_context and (
-        input_context.num_input_pipelines > 1):
+        input_context.num_input_pipelines > 1 and
+        not self._enable_tf_data_service):
       dataset = dataset.shard(input_context.num_input_pipelines,
                               input_context.input_pipeline_id)
     if self._is_training:
@@ -129,7 +154,8 @@ class InputReader:
         map_func=self._dataset_fn,
         cycle_length=self._cycle_length,
         block_length=self._block_length,
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        num_parallel_calls=tf.data.experimental.AUTOTUNE,
+        deterministic=self._deterministic)
     return dataset
 
   def _read_single_file(
@@ -145,8 +171,11 @@ class InputReader:
     options.experimental_distribute.auto_shard_policy = (
         tf.data.experimental.AutoShardPolicy.OFF)
     dataset = dataset.with_options(options)
+    # Do not enable sharding if tf.data service is enabled, as sharding will be
+    # handled inside tf.data service.
     if self._sharding and input_context and (
-        input_context.num_input_pipelines > 1):
+        input_context.num_input_pipelines > 1 and
+        not self._enable_tf_data_service):
       dataset = dataset.shard(input_context.num_input_pipelines,
                               input_context.input_pipeline_id)
     if self._is_training:
@@ -227,4 +256,18 @@ class InputReader:
           per_replica_batch_size, drop_remainder=self._drop_remainder)
 
     dataset = maybe_map_fn(dataset, self._postprocess_fn)
+
+    if self._enable_tf_data_service:
+      dataset = dataset.apply(
+          tf.data.experimental.service.distribute(
+              processing_mode='parallel_epochs',
+              service=self._tf_data_service_address,
+              job_name=self._tf_data_service_job_name))
+
+    dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+
+    if self._deterministic is not None:
+      options = tf.data.Options()
+      options.experimental_deterministic = self._deterministic
+      dataset = dataset.with_options(options)
     return dataset.prefetch(tf.data.experimental.AUTOTUNE)
