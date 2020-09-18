@@ -14,10 +14,6 @@
 # ==============================================================================
 """ALBERT (https://arxiv.org/abs/1810.04805) text encoder network."""
 # pylint: disable=g-classes-have-attributes
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
 
 import tensorflow as tf
 
@@ -64,6 +60,7 @@ class AlbertTransformerEncoder(tf.keras.Model):
     attention_dropout_rate: The dropout rate to use for the attention layers
       within the transformer layers.
     initializer: The initialzer to use for all weights in this encoder.
+    dict_outputs: Whether to use a dictionary as the model outputs.
   """
 
   def __init__(self,
@@ -79,6 +76,7 @@ class AlbertTransformerEncoder(tf.keras.Model):
                dropout_rate=0.1,
                attention_dropout_rate=0.1,
                initializer=tf.keras.initializers.TruncatedNormal(stddev=0.02),
+               dict_outputs=False,
                **kwargs):
     activation = tf.keras.activations.get(activation)
     initializer = tf.keras.initializers.get(initializer)
@@ -116,7 +114,7 @@ class AlbertTransformerEncoder(tf.keras.Model):
     word_embeddings = self._embedding_layer(word_ids)
 
     # Always uses dynamic slicing for simplicity.
-    self._position_embedding_layer = keras_nlp.PositionEmbedding(
+    self._position_embedding_layer = keras_nlp.layers.PositionEmbedding(
         initializer=initializer,
         max_length=max_sequence_length,
         name='position_embedding')
@@ -152,7 +150,7 @@ class AlbertTransformerEncoder(tf.keras.Model):
 
     data = embeddings
     attention_mask = layers.SelfAttentionMask()([data, mask])
-    shared_layer = keras_nlp.TransformerEncoderBlock(
+    shared_layer = keras_nlp.layers.TransformerEncoderBlock(
         num_attention_heads=num_attention_heads,
         inner_dim=intermediate_size,
         inner_activation=activation,
@@ -172,9 +170,16 @@ class AlbertTransformerEncoder(tf.keras.Model):
         kernel_initializer=initializer,
         name='pooler_transform')(
             first_token_tensor)
+    if dict_outputs:
+      outputs = dict(
+          sequence_output=data,
+          pooled_output=cls_output,
+      )
+    else:
+      outputs = [data, cls_output]
 
     super(AlbertTransformerEncoder, self).__init__(
-        inputs=[word_ids, mask, type_ids], outputs=[data, cls_output], **kwargs)
+        inputs=[word_ids, mask, type_ids], outputs=outputs, **kwargs)
 
   def get_embedding_table(self):
     return self._embedding_layer.embeddings
