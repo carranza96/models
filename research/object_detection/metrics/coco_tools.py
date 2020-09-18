@@ -202,7 +202,7 @@ class COCOEvalWrapper(cocoeval.COCOeval):
 
   def ComputeMetrics(self,
                      include_metrics_per_category=False,
-                     all_metrics_per_category=False,
+                     all_metrics_per_category=True,
                      super_categories=None):
     """Computes detection/keypoint metrics.
 
@@ -256,6 +256,11 @@ class COCOEvalWrapper(cocoeval.COCOeval):
     self.evaluate()
     self.accumulate()
     self.summarize()
+
+    # add for metrics per category from here
+    if include_metrics_per_category is True:
+        self.summarize_per_category()
+    # add for metrics per category end here
 
     summary_metrics = {}
     if self._iou_type in ['bbox', 'segm']:

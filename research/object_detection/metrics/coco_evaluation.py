@@ -34,7 +34,7 @@ class CocoDetectionEvaluator(object_detection_evaluation.DetectionEvaluator):
   def __init__(self,
                categories,
                include_metrics_per_category=False,
-               all_metrics_per_category=False,
+               all_metrics_per_category=True,
                skip_predictions_for_unlabeled_class=False,
                super_categories=None):
     """Constructor.
