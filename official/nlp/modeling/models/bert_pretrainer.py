@@ -39,7 +39,7 @@ class BertPretrainer(tf.keras.Model):
   *Note* that the model is constructed by
   [Keras Functional API](https://keras.io/guides/functional_api/).
 
-  Arguments:
+  Args:
     network: A transformer network. This network should output a sequence output
       and a classification output.
     num_classes: Number of classes to predict from the classification network.
@@ -165,7 +165,7 @@ class BertPretrainerV2(tf.keras.Model):
   Adds the masked language model head and optional classification heads upon the
   transformer encoder.
 
-  Arguments:
+  Args:
     encoder_network: A transformer network. This network should output a
       sequence output and a classification output.
     mlm_activation: The activation (if any) to use in the masked LM network. If
@@ -183,7 +183,7 @@ class BertPretrainerV2(tf.keras.Model):
     dictionary.
   Outputs: A dictionary of `lm_output`, classification head outputs keyed by
     head names, and also outputs from `encoder_network`, keyed by
-    `pooled_output`, `sequence_output` and `encoder_outputs` (if any).
+    `sequence_output` and `encoder_outputs` (if any).
   """
 
   def __init__(
@@ -248,7 +248,11 @@ class BertPretrainerV2(tf.keras.Model):
     outputs['mlm_logits'] = self.masked_lm(
         sequence_output, masked_positions=masked_lm_positions)
     for cls_head in self.classification_heads:
-      outputs[cls_head.name] = cls_head(sequence_output)
+      cls_outputs = cls_head(sequence_output)
+      if isinstance(cls_outputs, dict):
+        outputs.update(cls_outputs)
+      else:
+        outputs[cls_head.name] = cls_outputs
     return outputs
 
   @property

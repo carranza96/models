@@ -49,7 +49,7 @@ class EncoderScaffold(tf.keras.Model):
   *Note* that the network is constructed by
   [Keras Functional API](https://keras.io/guides/functional_api/).
 
-  Arguments:
+  Args:
     pooled_output_dim: The dimension of pooled output.
     pooler_layer_initializer: The initializer for the classification layer.
     embedding_cls: The class or instance to use to embed the input data. This
@@ -169,7 +169,7 @@ class EncoderScaffold(tf.keras.Model):
           tf.keras.layers.Dropout(
               rate=embedding_cfg['dropout_rate'])(embeddings))
 
-      attention_mask = layers.SelfAttentionMask()([embeddings, mask])
+      attention_mask = keras_nlp.layers.SelfAttentionMask()(embeddings, mask)
 
     data = embeddings
 
